@@ -5,13 +5,15 @@ import {
 import { deviceLessons, readDevicePhoto } from './devices.js';
 import { lifeGuides, readGuideRun, setGuideScreen, previousGuideScreen } from './guides.js';
 import { api, connectCloud, saveCloud, flushCloud, unsyncedCloud } from './cloud.js';
+import { createRecords } from './records.js';
 
 const app = document.querySelector('#app');
 const dialog = document.querySelector('#dialog');
 const status = document.querySelector('#status');
 const accountBar = document.querySelector('#account-bar');
-const routes = ['elder', 'family', 'chat', 'ask', 'reminders', 'family-chat', 'family-reminders', 'devices', 'device', 'family-devices', 'device-editor', 'guides', 'guide', 'connections', 'shared-device'];
-const elderRoutes = ['elder', 'chat', 'ask', 'reminders', 'devices', 'device', 'guides', 'guide', 'shared-device'];
+const recordRoutes = ['capture', 'records', 'record'];
+const routes = ['elder', 'family', 'chat', 'ask', 'reminders', 'family-chat', 'family-reminders', 'devices', 'device', 'family-devices', 'device-editor', 'guides', 'guide', 'connections', 'shared-device', ...recordRoutes];
+const elderRoutes = ['elder', 'chat', 'ask', 'reminders', 'devices', 'device', 'guides', 'guide', 'shared-device', ...recordRoutes];
 const voices = window.SpeechRecognition || window.webkitSpeechRecognition;
 const longDate = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
 const repeats = { never: '只提醒一次', daily: '每天提醒', weekly: '每周提醒' };
@@ -34,11 +36,13 @@ const symbol = {
   washer: '<rect x="3" y="2" width="18" height="20" rx="3"/><path d="M3 7h18M7 4.5h.01m4 0h.01"/><circle cx="12" cy="14" r="4"/>',
   cooker: '<rect x="3" y="8" width="18" height="12" rx="4"/><path d="M8 8V6a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m-7 5h6m-4 4h2"/>',
   photo: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.5"/><path d="m3 17 5-4 4 3 4-6 5 5"/>',
+  camera: '<path d="M8 6 9.4 4h5.2L16 6h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/><circle cx="12" cy="13" r="3.1"/>',
   parcel: '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18m-12-2h6m-4 7h2"/>',
   bill: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6m-6 4h6m-6 4h4"/>',
 };
 const icon = (name, size = 24) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${symbol[name]}</svg>`;
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+const records = createRecords({ paint: render, pageHeader, escapeHtml, icon, showDialog, closeDialog: () => dialog.close(), notify });
 
 let state = newState();
 let route = readRoute();
@@ -119,7 +123,7 @@ function homeHeader(owner) {
 }
 
 function pageHeader(title, owner, extra = '') {
-  const backLabel = { family: '家属端', devices: '家里设备', 'family-devices': '设备卡列表', guides: '生活操作指引', connections: '家庭连接' }[owner] ?? '长辈端';
+  const backLabel = { family: '家属端', devices: '家里设备', 'family-devices': '设备卡列表', guides: '生活操作指引', connections: '家庭连接', ask: '助手', records: '我的记录', 'guide/parcel': '快递柜取件指引', 'guide/bill': '查电费指引' }[owner] ?? '长辈端';
   return `<header class="topbar subbar"><a class="icon-button" href="#/${owner}" aria-label="返回${backLabel}">${icon('back')}</a><h1 id="screen-title" tabindex="-1">${title}</h1>${extra}<span class="subbar-space" aria-hidden="true"></span></header>`;
 }
 
@@ -132,19 +136,26 @@ function tile({ link, action, title, subtitle, glyph, tone = 'sage', prominent =
 
 function elderHome() {
   const next = reminderOrder(state.reminders, 'elder').find((item) => !item.done && item.at > Date.now());
-  return `${homeHeader('elder')}<main class="surface home-screen"><p class="date">${longDate.format(new Date())}</p>
-    <h1 id="screen-title" tabindex="-1">今天想做点什么？</h1>
-    <section class="hero home-device-hero" aria-labelledby="hero-title">
-      <div class="hero-copy"><h2 id="hero-title">教我下一步</h2><p>取快递、查电费</p>
-      <a class="hero-link" href="#/guides">生活操作指引</a></div>
-      <div class="hero-picture" aria-hidden="true"><img src="./assets/chat.png" alt="" width="560" height="560"></div>
+  return `${homeHeader('elder')}<main class="surface home-screen">
+    <div class="home-heading"><h1 id="screen-title" tabindex="-1">今天想做点什么？</h1><p class="date">${longDate.format(new Date())}</p></div>
+    <section class="field-hero" aria-labelledby="hero-title">
+      <div class="field-copy"><h2 id="hero-title">教我下一步</h2><p>取快递、查电费，<br>遇到卡住的画面可以拍下来。</p>
+        <div class="field-actions">
+          <a class="button field-primary" href="#/capture/other/home">${icon('camera', 24)}拍照取证</a>
+          <a class="field-link" href="#/guides">生活操作指引</a>
+        </div>
+      </div>
+      <div class="field-picture"><img src="./assets/field-guide.webp" alt="" width="720" height="1080" fetchpriority="high"></div>
     </section>
-    <div class="stack home-actions">
-      ${tile({ link: 'devices', title: '学用家里设备', subtitle: '看图找按键、练一练', glyph: 'remote' })}
-      ${tile({ link: 'chat', title: '聊聊天', subtitle: state.greeted ? '想说的话，慢慢说' : '有一条新问候', glyph: 'chat' })}
-      ${tile({ link: 'reminders', title: '设置提醒', subtitle: '记住生活里的大小事', glyph: 'bell', tone: 'apricot' })}
-      ${tile({ link: 'ask', title: '问问助手', subtitle: '手机、出门和日常小事', glyph: 'question' })}
-    </div>
+    <section class="home-tools" aria-labelledby="home-tools-title">
+      <div class="section-heading"><h2 id="home-tools-title">常用功能</h2><a class="section-link" href="#/records">${icon('photo', 21)}我的记录</a></div>
+      <div class="home-actions">
+        ${tile({ link: 'ask', title: '问问助手', subtitle: '手机、出门和日常小事', glyph: 'question' })}
+        ${tile({ link: 'devices', title: '学用家里设备', subtitle: '看图找按键、练一练', glyph: 'remote' })}
+        ${tile({ link: 'reminders', title: '设置提醒', subtitle: '把要做的事记下来', glyph: 'bell', tone: 'apricot' })}
+        ${tile({ link: 'chat', title: '聊聊天', subtitle: state.greeted ? '想说的话，慢慢说' : '有一条新问候', glyph: 'chat' })}
+      </div>
+    </section>
     <a class="next-reminder" href="#/reminders"><span><strong>下一条提醒</strong><span>${icon('calendar', 22)}${next ? `${formatWhen(next.at)}　${escapeHtml(next.title)}` : '还没有安排'}</span></span>${icon('right', 22)}</a>
   </main>`;
 }
@@ -186,6 +197,7 @@ function chatScreen(mode) {
   const toggle = `<button class="listen" data-action="listen" type="button" aria-pressed="${state.listen}">${icon('sound', 20)}听回复<span class="switch" aria-hidden="true"></span></button>`;
   const owner = mode === 'family-chat' ? 'family' : 'elder';
   return `${pageHeader(config.title, owner, toggle)}<main class="surface conversation" data-mode="${mode}">
+    ${mode === 'ask' ? `<nav class="assistant-tools" aria-label="助手工具"><a class="button" href="#/capture">${icon('camera', 22)}拍照取证</a><a class="button quiet" href="#/records">我的记录</a></nav>` : ''}
     <div class="message-list" role="log" aria-label="聊天记录">${messages.map(renderMessage).join('')}</div>
     <div class="composer-area">
       <div class="examples" aria-label="常用说法">${config.examples.map((example) => `<button class="example" type="button" data-action="example" data-text="${escapeHtml(example)}">${escapeHtml(example)}</button>`).join('')}</div>
@@ -425,6 +437,7 @@ function guideScreen() {
         const step = guide.steps[key];
         return `<button class="guide-choice" type="button" data-action="guide-start" data-step="${key}"><span><strong>${escapeHtml(step.title)}</strong><span>${escapeHtml(step.preview.labels.join(' · '))}</span></span>${icon('right', 21)}</button>`;
       }).join('')}<button class="button quiet wide" type="button" data-action="guide-help">都不一样，找人帮忙</button></div>
+      <a class="button quiet guide-capture" href="#/capture/${guide.id}">${icon('camera', 22)}拍下当前画面</a>
       <p class="device-help guide-caption">示例里没有真实取件码、户号或交易。</p>
     </main>`;
   }
@@ -618,6 +631,7 @@ function render() {
     'family-reminders': () => remindersScreen('family'), devices: devicesScreen, device: deviceScreen,
     'family-devices': familyDevicesScreen, 'device-editor': deviceEditorScreen, guides: guidesScreen, guide: guideScreen,
     connections: connectionsScreen, 'shared-device': deviceScreen,
+    capture: records.captureScreen, records: records.recordsScreen, record: records.recordScreen,
   };
   app.innerHTML = screens[route]();
 }
@@ -747,7 +761,7 @@ function refresh(message) {
 }
 
 function checkReminders() {
-  if (document.visibilityState !== 'visible') return;
+  if (document.visibilityState !== 'visible' || route === 'capture') return;
   const owner = elderRoutes.includes(route) ? 'elder' : 'family';
   const due = state.reminders.find((item) => item.owner === owner && !item.done && !item.notified && item.at <= Date.now());
   if (!due || dialog.open) return;
@@ -763,6 +777,7 @@ document.addEventListener('click', (event) => {
   const { action, id, text } = button.dataset;
   if (action === 'cloud-reconnect') { void startCloud(); return; }
   if (!account) return;
+  if (recordRoutes.includes(route) && action.startsWith('capture-')) { void records.action(action, button); return; }
   if (action === 'cloud-retry') { void flushCloud(); return; }
   if (action === 'cloud-refresh') {
     showDialog('读取云端版本？', '<p class="form-help">本页尚未同步的修改将被放弃，账户会回到云端保存的版本。</p><button class="button wide" data-action="cloud-refresh-confirm" type="button">读取云端版本</button>');
@@ -902,6 +917,7 @@ document.addEventListener('submit', (event) => {
   event.preventDefault();
   const data = new FormData(form);
   switch (form.dataset.form) {
+    case 'scene-record': void records.save(data); break;
     case 'join-family':
     case 'share-family': void familyForm(form, data); break;
     case 'device-guide': saveDeviceGuide(form); break;
@@ -949,6 +965,7 @@ document.addEventListener('submit', (event) => {
 
 document.addEventListener('change', async (event) => {
   const field = event.target;
+  if (field.id === 'capture-album' || field.id === 'capture-native') { await records.readFile(field); return; }
   if (field.id !== 'device-file' || !field.files.length) return;
   const editor = deviceEditor;
   const form = field.form;
@@ -1002,6 +1019,8 @@ dialog.addEventListener('close', () => {
 function enterScreen(focus = false) {
   if (!account) return;
   const id = routeDeviceId();
+  if (recordRoutes.includes(route)) records.open(route, id, location.hash.split('/')[3]);
+  else records.close();
   deviceStep = 0;
   deviceEditor = null;
   if (route === 'guide' && state.guideRuns[id]?.screen === 'done') {
@@ -1033,6 +1052,10 @@ window.addEventListener('hashchange', () => {
 document.addEventListener('visibilitychange', () => {
   noteActivity();
   if (account) checkReminders();
+});
+window.addEventListener('pagehide', records.stopCamera);
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted && route === 'capture') void records.action('capture-reset');
 });
 window.addEventListener('beforeunload', (event) => {
   if (unsyncedCloud()) { event.preventDefault(); event.returnValue = ''; }

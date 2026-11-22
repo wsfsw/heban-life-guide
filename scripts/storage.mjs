@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export async function localStorageBindings(folder) {
@@ -8,6 +8,9 @@ export async function localStorageBindings(folder) {
   sql.exec('PRAGMA foreign_keys = ON;');
   if (!sql.prepare("select 1 from sqlite_master where type='table' and name='profiles'").get()) {
     sql.exec(await readFile(new URL('../drizzle/0000_initial.sql', import.meta.url), 'utf8'));
+  }
+  if (!sql.prepare("select 1 from sqlite_master where type='table' and name='scene_records'").get()) {
+    sql.exec(await readFile(new URL('../drizzle/0001_scene_records.sql', import.meta.url), 'utf8'));
   }
   const prepare = (statement) => {
     const query = sql.prepare(statement);
@@ -41,6 +44,11 @@ export async function localStorageBindings(folder) {
           const value = folder ? await readFile(join(folder, key)) : files.get(key);
           return value ? { body: value } : null;
         } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+      },
+      async delete(key) {
+        if (!folder) { files.delete(key); return; }
+        try { await unlink(join(folder, key)); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
       },
     },
     close: () => sql.close(),

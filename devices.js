@@ -56,20 +56,25 @@ export async function readDevicePhoto(file) {
   try {
     picture.src = url;
     await picture.decode();
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    for (const width of [960, 760, 560, 420]) {
-      const scale = Math.min(1, width / Math.max(picture.naturalWidth, picture.naturalHeight));
-      canvas.width = Math.max(1, Math.round(picture.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(picture.naturalHeight * scale));
-      context.fillStyle = '#fff';
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(picture, 0, 0, canvas.width, canvas.height);
-      const data = canvas.toDataURL('image/jpeg', 0.77);
-      if (data.length <= 190_000) return data;
-    }
-    throw new Error('照片细节太多，请只拍清楚要标记的按键。');
+    return compressPhoto(picture, picture.naturalWidth, picture.naturalHeight);
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+export function compressPhoto(picture, width, height) {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context || !width || !height) throw new Error('暂时无法读取画面，请再试一次。');
+  for (const limit of [1280, 960, 760, 560, 420]) {
+    const scale = Math.min(1, limit / Math.max(width, height));
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(picture, 0, 0, canvas.width, canvas.height);
+    const data = canvas.toDataURL('image/jpeg', 0.77);
+    if (data.length <= 190_000) return data;
+  }
+  throw new Error('照片细节过多，请裁小一点或重新拍摄。');
 }

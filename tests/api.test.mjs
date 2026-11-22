@@ -76,3 +76,37 @@ test('one-time family invites, deliberate sharing, photo access and revocation',
   await family('/api/family/link/elder', 'DELETE');
   assert.equal((await (await family('/api/family')).json()).items.length, 0);
 });
+
+test('scene photos require sign-in, remain private to the owner and can be deleted', async (t) => {
+  const env = await localStorageBindings();
+  t.after(env.close);
+  const elder = client(env, 'elder');
+  const family = client(env, 'family');
+  const route = '/api/records';
+  const draft = { scene: 'parcel', note: '柜门未打开', photo: 'data:image/jpeg;base64,/9j/2Q==', source: 'camera' };
+  assert.equal((await client(env)(route, 'POST', draft)).status, 401);
+  assert.equal((await elder(route, 'POST', draft, 'https://other.test')).status, 403);
+  assert.equal((await elder(route, 'POST', { ...draft, scene: 'unknown' })).status, 422);
+  const response = await elder(route, 'POST', draft);
+  assert.equal(response.status, 201);
+  const { record } = await response.json();
+  const recordRoute = route + '/' + record.id;
+  assert.equal(record.note, draft.note);
+  assert.equal(record.source, 'camera');
+  assert.ok(record.createdAt <= Date.now());
+  assert.deepEqual((await (await elder(route)).json()).records, [record]);
+  const invite = await (await elder('/api/family/invite', 'POST')).json();
+  assert.equal((await family('/api/family/join', 'POST', { code: invite.code })).status, 200);
+  assert.deepEqual((await (await family(route)).json()).records, []);
+  assert.equal((await family(recordRoute)).status, 404);
+  assert.equal((await family(record.photo)).status, 404);
+  assert.equal((await family(recordRoute, 'DELETE')).status, 404);
+  const photo = await elder(record.photo);
+  assert.equal(photo.headers.get('cache-control'), 'private, no-store');
+  assert.equal(photo.headers.get('content-type'), 'image/jpeg');
+  assert.deepEqual([...new Uint8Array(await photo.arrayBuffer())], [255, 216, 255, 217]);
+  assert.equal((await elder(recordRoute, 'DELETE')).status, 200);
+  assert.equal((await elder(record.photo)).status, 404);
+  assert.equal(await env.BUCKET.get('evidence-' + record.id + '.jpg'), null);
+  assert.deepEqual((await (await elder(route)).json()).records, []);
+});

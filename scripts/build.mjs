@@ -9,13 +9,14 @@ const types = {
   'app.js': 'text/javascript; charset=utf-8',
   'cloud.js': 'text/javascript; charset=utf-8',
   'devices.js': 'text/javascript; charset=utf-8',
+  'records.js': 'text/javascript; charset=utf-8',
   'guides.js': 'text/javascript; charset=utf-8',
   'logic.js': 'text/javascript; charset=utf-8',
 };
 const assets = Object.fromEntries(await Promise.all(Object.entries(types).map(async ([file, type]) => [`/${file}`, { type, body: await read(file) }])));
-assets['/assets/chat.png'] = {
-  type: 'image/png',
-  encoded: (await readFile(new URL('assets/chat.png', root))).toString('base64'),
+assets['/assets/field-guide.webp'] = {
+  type: 'image/webp',
+  encoded: (await readFile(new URL('assets/field-guide.webp', root))).toString('base64'),
 };
 
 const server = await read('api.js');

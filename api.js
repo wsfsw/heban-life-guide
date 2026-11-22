@@ -7,6 +7,8 @@ const hours = (count) => count * 3_600_000;
 const safeId = /^[A-Za-z0-9_-]{1,128}$/;
 const photoId = /^[a-f0-9]{64}$/;
 const picturePath = /^\/api\/photo\/([a-f0-9]{64})$/;
+const recordPath = /^\/api\/records\/([0-9a-f-]{36})(\/photo)?$/;
+const recordScenes = ['parcel', 'bill', 'device', 'other'];
 const phonePattern = /^\+?\d{5,18}$/;
 const lines = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const timestamp = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 4_102_444_800_000 ? value : null;
@@ -65,25 +67,71 @@ async function ownedProfile(db, user) {
   return get(db, 'SELECT display_name, revision, state FROM profiles WHERE user_id = ?', user.id);
 }
 
+function decodePicture(source) {
+  if (typeof source !== 'string') fail(422, '请重新选择照片。');
+  const encoded = source.match(/^data:image\/jpeg;base64,([A-Za-z0-9+/]+={0,2})$/)?.[1];
+  if (!encoded || source.length > 190_000) fail(422, '请选择有效的照片。');
+  let bytes;
+  try { bytes = Uint8Array.from(atob(encoded), (letter) => letter.charCodeAt(0)); }
+  catch { fail(422, '请选择有效的照片。'); }
+  if (bytes[0] !== 255 || bytes[1] !== 216 || bytes[2] !== 255) fail(422, '请选择有效的照片。');
+  return { bytes, encoded };
+}
+
 async function storePicture(env, owner, source) {
-  if (typeof source !== 'string') fail(422, '请重新选择设备照片。');
-  const existing = source.match(picturePath)?.[1];
+  const existing = typeof source === 'string' ? source.match(picturePath)?.[1] : null;
   if (existing) {
     if (!await get(env.DB, 'SELECT id FROM photos WHERE id = ? AND owner_id = ?', existing, owner)) fail(403, '这张照片不在您的账户里。');
     return source;
   }
-  const encoded = source.match(/^data:image\/jpeg;base64,([A-Za-z0-9+/]+={0,2})$/)?.[1];
-  if (!encoded || source.length > 190_000) fail(422, '请选择有效的设备照片。');
-  let bytes;
-  try { bytes = Uint8Array.from(atob(encoded), (letter) => letter.charCodeAt(0)); }
-  catch { fail(422, '请选择有效的设备照片。'); }
-  if (bytes[0] !== 255 || bytes[1] !== 216 || bytes[2] !== 255) fail(422, '请选择有效的设备照片。');
+  const { bytes, encoded } = decodePicture(source);
   const id = await digest(`${owner}:${encoded}`);
   if (!await get(env.DB, 'SELECT id FROM photos WHERE id = ? AND owner_id = ?', id, owner)) {
     await env.BUCKET.put(id, bytes, { httpMetadata: { contentType: 'image/jpeg' } });
     await run(env.DB, 'INSERT OR IGNORE INTO photos VALUES (?, ?)', id, owner);
   }
   return `/api/photo/${id}`;
+}
+
+const recordColumns = 'id, scene, note, source, created_at AS createdAt';
+const recordKey = (id) => `evidence-${id}.jpg`;
+const recordView = (record) => ({ ...record, photo: `/api/records/${record.id}/photo` });
+
+async function createRecord(request, env, user) {
+  const data = await readJson(request, 205_000);
+  if (!data || !recordScenes.includes(data.scene) || !['camera', 'album'].includes(data.source)) fail(422, '请选择照片的用途。');
+  const { bytes } = decodePicture(data.photo);
+  const count = await get(env.DB, 'SELECT count(*) AS total FROM scene_records WHERE owner_id = ?', user.id);
+  if (count.total >= 24) fail(422, '最多保存 24 条现场记录，请先整理旧照片。');
+  const record = { id: crypto.randomUUID(), scene: data.scene, note: lines(data.note, 140), source: data.source, createdAt: Date.now() };
+  const key = recordKey(record.id);
+  await env.BUCKET.put(key, bytes, { httpMetadata: { contentType: 'image/jpeg' } });
+  try {
+    const result = await run(env.DB, `INSERT INTO scene_records SELECT ?, ?, ?, ?, ?, ?
+      WHERE (SELECT count(*) FROM scene_records WHERE owner_id = ?) < 24`, record.id, user.id, record.scene, record.note, record.source, record.createdAt, user.id);
+    if (!result.meta.changes) fail(422, '最多保存 24 条现场记录，请先整理旧照片。');
+  } catch (error) {
+    await env.BUCKET.delete(key);
+    throw error;
+  }
+  return json({ record: recordView(record) }, 201);
+}
+
+async function serveRecord(env, user, method, id, photo) {
+  const record = await get(env.DB, `SELECT ${recordColumns} FROM scene_records WHERE id = ? AND owner_id = ?`, id, user.id);
+  if (!record) fail(404, '找不到这条现场记录。');
+  if (method === 'GET' && !photo) return json({ record: recordView(record) });
+  if (method === 'GET' && photo) {
+    const object = await env.BUCKET.get(recordKey(id));
+    if (!object) fail(404, '找不到这张照片。');
+    return new Response(object.body, { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' } });
+  }
+  if (method === 'DELETE' && !photo) {
+    await env.BUCKET.delete(recordKey(id));
+    await run(env.DB, 'DELETE FROM scene_records WHERE id = ? AND owner_id = ?', id, user.id);
+    return json({ removed: true });
+  }
+  fail(405, '这个操作不可用。');
 }
 
 function cleanMessages(source) {
@@ -161,6 +209,13 @@ async function routeApi(request, env) {
     if (request.headers.get('origin') !== url.origin) fail(403, '请从禾伴页面操作。');
   }
   const db = env.DB;
+  if (pathname === '/api/records' && method === 'GET') {
+    const entries = await all(db, `SELECT ${recordColumns} FROM scene_records WHERE owner_id = ? ORDER BY created_at DESC LIMIT 24`, user.id);
+    return json({ records: entries.map(recordView) });
+  }
+  if (pathname === '/api/records' && method === 'POST') return createRecord(request, env, user);
+  const record = pathname.match(recordPath);
+  if (record) return serveRecord(env, user, method, record[1], Boolean(record[2]));
   if (method === 'GET' && pathname === '/api/state') {
     const record = await ownedProfile(db, user);
     return json({ user: { name: record.display_name }, revision: record.revision, state: JSON.parse(record.state) });
