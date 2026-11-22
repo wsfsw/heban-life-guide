@@ -14,11 +14,6 @@ const types = {
   'logic.js': 'text/javascript; charset=utf-8',
 };
 const assets = Object.fromEntries(await Promise.all(Object.entries(types).map(async ([file, type]) => [`/${file}`, { type, body: await read(file) }])));
-assets['/assets/field-guide.webp'] = {
-  type: 'image/webp',
-  encoded: (await readFile(new URL('assets/field-guide.webp', root))).toString('base64'),
-};
-
 const server = await read('api.js');
 const moduleText = server + '\nconst siteAssets = ' + JSON.stringify(assets) + ';\n' + `
 export default {

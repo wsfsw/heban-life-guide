@@ -137,26 +137,35 @@ function tile({ link, action, title, subtitle, glyph, tone = 'sage', prominent =
 function elderHome() {
   const next = reminderOrder(state.reminders, 'elder').find((item) => !item.done && item.at > Date.now());
   return `${homeHeader('elder')}<main class="surface home-screen">
-    <div class="home-heading"><h1 id="screen-title" tabindex="-1">今天想做点什么？</h1><p class="date">${longDate.format(new Date())}</p></div>
-    <section class="field-hero" aria-labelledby="hero-title">
-      <div class="field-copy"><h2 id="hero-title">教我下一步</h2><p>取快递、查电费，<br>遇到卡住的画面可以拍下来。</p>
-        <div class="field-actions">
-          <a class="button field-primary" href="#/capture/other/home">${icon('camera', 24)}拍照取证</a>
-          <a class="field-link" href="#/guides">生活操作指引</a>
+    <div class="home-heading"><h1 id="screen-title" tabindex="-1">生活帮手</h1><p class="date">${longDate.format(new Date())}</p></div>
+    <div class="home-layout">
+      <div class="home-main">
+        <section class="home-capture" aria-labelledby="capture-home-title">
+          <h2 id="capture-home-title">操作卡住了？</h2>
+          <p>拍下报错提示或操作界面，方便以后查看。</p>
+          <div class="home-capture-actions">
+            <a class="button home-camera-button" href="#/capture/other/home">${icon('camera', 23)}拍照取证</a>
+            <a class="section-link" href="#/records">我的记录</a>
+          </div>
+        </section>
+        <section aria-labelledby="home-guides-title">
+          <div class="section-heading"><h2 id="home-guides-title">生活操作指引</h2></div>
+          <div class="home-actions">
+            ${tile({ link: 'guide/parcel', title: '快递柜取件', subtitle: '找取件入口、打开柜门', glyph: 'parcel' })}
+            ${tile({ link: 'guide/bill', title: '查本期电费', subtitle: '找到账单和缴费记录', glyph: 'bill' })}
+          </div>
+        </section>
+      </div>
+      <section class="home-tools" aria-labelledby="home-tools-title">
+        <div class="section-heading"><h2 id="home-tools-title">常用功能</h2></div>
+        <div class="home-actions">
+          ${tile({ link: 'ask', title: '问问助手', subtitle: '手机、出门和日常小事', glyph: 'question' })}
+          ${tile({ link: 'devices', title: '学用家里设备', subtitle: '看图找按键', glyph: 'remote' })}
+          ${tile({ link: 'reminders', title: '设置提醒', subtitle: next ? `${formatWhen(next.at)}　${next.title}` : '还没有待办提醒', glyph: 'bell' })}
+          ${tile({ link: 'chat', title: '聊聊天', subtitle: state.greeted ? '' : '有一条新问候', glyph: 'chat' })}
         </div>
-      </div>
-      <div class="field-picture"><img src="./assets/field-guide.webp" alt="" width="720" height="1080" fetchpriority="high"></div>
-    </section>
-    <section class="home-tools" aria-labelledby="home-tools-title">
-      <div class="section-heading"><h2 id="home-tools-title">常用功能</h2><a class="section-link" href="#/records">${icon('photo', 21)}我的记录</a></div>
-      <div class="home-actions">
-        ${tile({ link: 'ask', title: '问问助手', subtitle: '手机、出门和日常小事', glyph: 'question' })}
-        ${tile({ link: 'devices', title: '学用家里设备', subtitle: '看图找按键、练一练', glyph: 'remote' })}
-        ${tile({ link: 'reminders', title: '设置提醒', subtitle: '把要做的事记下来', glyph: 'bell', tone: 'apricot' })}
-        ${tile({ link: 'chat', title: '聊聊天', subtitle: state.greeted ? '想说的话，慢慢说' : '有一条新问候', glyph: 'chat' })}
-      </div>
-    </section>
-    <a class="next-reminder" href="#/reminders"><span><strong>下一条提醒</strong><span>${icon('calendar', 22)}${next ? `${formatWhen(next.at)}　${escapeHtml(next.title)}` : '还没有安排'}</span></span>${icon('right', 22)}</a>
+      </section>
+    </div>
   </main>`;
 }
 
@@ -170,22 +179,22 @@ function familyHome() {
   const callReminder = reminderOrder(state.reminders, 'family').find((item) => !item.done && item.at > Date.now());
   const phoneAction = state.phone ? `<a class="button small" href="tel:${escapeHtml(state.phone)}">${icon('phone', 19)}去拨打</a>` : '<button class="button small" data-action="contact" type="button">设置号码</button>';
   return `${homeHeader('family')}<main class="surface family-screen"><h1 id="screen-title" tabindex="-1">家人关怀</h1>
-    <div class="family-device-entry">${tile({ link: 'family-devices', title: '给长辈做设备卡', subtitle: '用家里的照片，标出每一步', glyph: 'photo', prominent: true })}</div>
     <button class="care-card ${overdue ? 'care-warn' : ''}" type="button" data-action="care"><span class="care-icon">${icon('heart', 42)}</span>
       <span><strong>${demoLastSeen ? '关怀状态 · 演示' : '关怀状态'}</strong><span>${activity}</span></span>${icon('right', 22)}</button>
     <div class="contact-card"><span class="tile-icon apricot">${icon('phone', 30)}</span><span class="tile-text"><strong>给${escapeHtml(state.contactName)}打电话</strong><span>${callReminder ? `${formatWhen(callReminder.at)} 有联系提醒` : '选个时间，打个电话'}</span></span>${phoneAction}</div>
-    <div class="stack">
+    <div class="home-actions">
       ${tile({ link: 'connections', title: '家庭连接', subtitle: '连接家人，查看主动分享的内容', glyph: 'people' })}
-      ${tile({ link: 'family-reminders', title: '联系提醒', subtitle: '设置一个时间，提醒我打电话', glyph: 'calendar', prominent: true })}
+      ${tile({ link: 'family-reminders', title: '联系提醒', subtitle: '设置打电话的时间', glyph: 'calendar' })}
+      ${tile({ link: 'family-devices', title: '给长辈做设备卡', subtitle: '用家里的照片标出操作步骤', glyph: 'photo' })}
       ${tile({ link: 'family-chat', title: '跟助手聊聊', subtitle: '想想怎么关心家人', glyph: 'chat' })}
-      ${state.phone ? '<button class="text-button" type="button" data-action="contact">修改联系人号码</button>' : ''}
     </div>
+    ${state.phone ? '<button class="text-button" type="button" data-action="contact">修改联系人号码</button>' : ''}
   </main>`;
 }
 
 const chatConfig = {
   chat: { title: '聊聊天', examples: ['今天想聊聊天', '附近有什么社区活动？', '明天下午三点提醒我浇花'], greeting: '您好，我是{name}。您可以和我说说今天过得怎么样，也可以让我帮您记一件要做的事。' },
-  ask: { title: '问问助手', examples: topics.slice(0, 3).map((topic) => topic.title), greeting: '您好，我是{name}。手机、缴费、出门这些小事，有哪一步想问问？' },
+  ask: { title: '问问助手', examples: topics.slice(0, 3).map((topic) => topic.title), greeting: '您现在想做什么？可以从「怎么查电费」这样的问题问起。' },
   'family-chat': { title: '跟助手聊聊', examples: ['怎么和爸妈打开话题？', '明天晚上八点提醒我给爸妈打电话'], greeting: '您好，我是{name}。您可以问我怎么和长辈聊聊，也可以设置一个联系提醒。' },
 };
 
@@ -193,7 +202,6 @@ function chatScreen(mode) {
   const config = chatConfig[mode];
   const greeting = config.greeting.replace('{name}', state.persona);
   const messages = [{ role: 'assistant', text: greeting }, ...state.messages[mode]];
-  if (mode === 'ask' && !state.messages.ask.length) messages.push({ role: 'hint', text: '问完以后，可以自己决定要不要把这个问题分享给家人。' });
   const toggle = `<button class="listen" data-action="listen" type="button" aria-pressed="${state.listen}">${icon('sound', 20)}听回复<span class="switch" aria-hidden="true"></span></button>`;
   const owner = mode === 'family-chat' ? 'family' : 'elder';
   return `${pageHeader(config.title, owner, toggle)}<main class="surface conversation" data-mode="${mode}">
@@ -208,7 +216,6 @@ function chatScreen(mode) {
 }
 
 function renderMessage(message) {
-  if (message.role === 'hint') return `<p class="message-hint">${escapeHtml(message.text)}</p>`;
   const tools = [];
   if (message.role === 'assistant') tools.push(`<button class="message-action" type="button" data-action="read" data-text="${escapeHtml(message.text)}" aria-label="朗读这条回复">${icon('sound', 17)}朗读</button>`);
   if (route === 'ask' && message.role === 'user') {
@@ -605,7 +612,7 @@ async function connectionAction(action, id, button) {
 function cloudEntry(message = '', error = false) {
   accountBar.hidden = true;
   app.innerHTML = `<header class="topbar"><span class="brand">${icon('home', 40)}禾伴</span></header>
-    <main class="surface cloud-entry"><h1>生活小事，一步一步来</h1><p>登录后，可保存您的指引进度、提醒和家庭分享。</p>
+    <main class="surface cloud-entry"><h1>生活操作指引</h1><p>查看取件、查电费和设备使用步骤。登录后可以保存现场照片和提醒。</p>
     ${message ? `<p class="${error ? 'form-error' : 'device-help'}" role="status">${escapeHtml(message)}</p>` : ''}
     <a class="button wide" target="_top" href="${signIn()}">使用 ChatGPT 登录</a>
     ${error ? '<button class="button quiet wide" type="button" data-action="cloud-reconnect">重新连接</button>' : ''}</main>`;
