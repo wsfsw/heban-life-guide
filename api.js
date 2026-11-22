@@ -113,7 +113,11 @@ async function assistantRoute(request, url, env) {
         messages: [{ role: 'system', content: system }, ...previous, { role: 'user', content }],
         ...(photo ? { response_format: { type: 'json_object' } } : {}),
       }),
-    }).catch(() => fail(502, '在线助手暂时连不上，请稍后再试。'));
+    }).catch((error) => {
+      const detail = lines(error.message, 240).replace(/sk-[a-zA-Z0-9_-]+/g, '[secret]');
+      console.warn('DeepSeek connection failed', error.name, detail);
+      fail(502, '在线助手暂时连不上，请稍后再试。');
+    });
     if (!result.ok) {
       console.warn('DeepSeek response status', result.status);
       if (result.status === 402) fail(503, '在线助手的服务额度已用完。');
