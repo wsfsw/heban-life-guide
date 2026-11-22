@@ -1,0 +1,11 @@
+{
+  "name": "heban-online",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/local.mjs",
+    "check": "node --check app.js && node --check cloud.js && node --check api.js && node --check scripts/build.mjs && node --check scripts/local.mjs",
+    "test": "node --test tests/api.test.mjs"
+  }
+}
