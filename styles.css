@@ -19,7 +19,7 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-body { margin: 0; min-width: 280px; }
+body { margin: 0; min-width: 280px; padding-inline: env(safe-area-inset-left) env(safe-area-inset-right); padding-top: env(safe-area-inset-top); }
 ::selection { background: #ccdfbd; color: var(--ink); }
 h1, h2, p { margin: 0; }
 a { color: inherit; text-decoration: none; }
@@ -54,7 +54,7 @@ svg { flex: 0 0 auto; vertical-align: middle; }
 .subbar:has(.listen) .subbar-space { display: none; }
 .subbar:has(.listen) h1 { text-align: left; }
 
-.surface { padding: 6px 20px 26px; }
+.surface { padding: 6px 20px max(26px, env(safe-area-inset-bottom)); }
 .surface h1 { font-size: clamp(29px, 7.1vw, 40px); line-height: 1.24; letter-spacing: -0.035em; font-weight: 780; }
 .surface h2 { font-size: 23px; line-height: 1.35; }
 .date { font-size: 0.92rem; line-height: 1.4; color: var(--muted); }
@@ -357,3 +357,20 @@ video.capture-frame { aspect-ratio: 4 / 3; background: #1c261f; }
 .record-list img { width: 64px; height: 64px; border-radius: 9px; object-fit: cover; background: #e9ede2; flex: 0 0 auto; }
 .record-list a > span { display: grid; gap: 3px; min-width: 0; }
 .record-list a span span { color: var(--muted); font-size: 0.9rem; overflow-wrap: anywhere; }
+
+.entry-choice { display: grid; gap: 12px; width: min(100%, 480px); margin-inline: auto; padding-block: 24px 40px; }
+.entry-choice > p { line-height: 1.55; color: var(--muted); margin: 0 0 4px; }
+.entry-choice .button { min-height: 52px; margin: 0; }
+.entry-choice .text-button { font-size: 0.95rem; text-align: left; }
+.sign-in-form { display: grid; gap: 8px; }
+.sign-in-form label { font-weight: 700; }
+.sign-in-form input { margin-bottom: 6px; }
+.old-account { padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.9rem; }
+.old-account summary { padding-block: 12px; cursor: pointer; }
+.old-account a { display: inline-flex; align-items: center; min-height: 44px; color: var(--green-dark); text-decoration: underline; }
+
+@media (max-width: 520px) {
+  .entry-choice { padding-top: 16px; }
+  .sign-in-form input { scroll-margin-block: 12px; }
+  .capture-form, .composer { scroll-margin-bottom: max(16px, env(safe-area-inset-bottom)); }
+}

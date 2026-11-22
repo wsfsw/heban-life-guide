@@ -4,8 +4,9 @@ import {
 } from './logic.js';
 import { deviceLessons, readDevicePhoto } from './devices.js';
 import { lifeGuides, readGuideRun, setGuideScreen, previousGuideScreen } from './guides.js';
-import { api, connectCloud, saveCloud, flushCloud, unsyncedCloud } from './cloud.js';
+import { api, photoUrl, connectCloud, saveCloud, flushCloud, unsyncedCloud } from './cloud.js';
 import { createRecords } from './records.js';
+import { signInWithDevice } from './sign-in.js';
 
 const app = document.querySelector('#app');
 const dialog = document.querySelector('#dialog');
@@ -42,7 +43,7 @@ const symbol = {
 };
 const icon = (name, size = 24) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${symbol[name]}</svg>`;
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-const records = createRecords({ paint: render, pageHeader, escapeHtml, icon, showDialog, closeDialog: () => dialog.close(), notify });
+const records = createRecords({ paint: render, pageHeader, escapeHtml, icon, showDialog, closeDialog: () => dialog.close(), notify, isGuest: () => account?.guest });
 
 let state = newState();
 let route = readRoute();
@@ -58,18 +59,28 @@ let familyError = '';
 let familyBusy = false;
 let cloudStatus = 'saving';
 let invite = null;
-const signIn = () => `/signin-with-chatgpt?return_to=${encodeURIComponent('/' + location.hash)}`;
-const signOut = '/signout-with-chatgpt?return_to=%2F';
+let authMode = '';
+let authPanel = false;
+let formMode = '';
+let authBusy = false;
+const legacySignIn = '/signin-with-chatgpt?return_to=%2F%23%2Flegacy';
+
+function accessPreference(value) {
+  try {
+    if (value === undefined) return localStorage.getItem('heban-access');
+    localStorage.setItem('heban-access', value);
+  } catch { /* Permission to use persistent storage is optional for guests. */ }
+}
 
 function updateCloudStatus(current, detail = '') {
   cloudStatus = current;
-  if (!account) return;
-  const text = { saving: '正在保存', saved: '已云端保存', error: '保存失败', conflict: '另一台设备有更新', auth: '登录已失效' };
+  if (!account || authPanel) return;
+  const text = { saving: '正在保存', saved: account.guest ? account.temporary ? '本次访问有效' : '已保存到本机' : '已云端保存', error: '保存失败', conflict: '另一台设备有更新', auth: '登录已失效' };
   accountBar.hidden = false;
-  accountBar.innerHTML = `<div><a href="#/connections">${escapeHtml(account.name)}</a><span class="sync-label" role="status">${text[current]}</span></div>
+  accountBar.innerHTML = `<div>${account.guest ? '<span>游客</span><button type="button" class="text-button" data-action="show-login">用邮箱登录</button>' : `<a href="#/connections">${escapeHtml(account.name)}</a>`}<span class="sync-label" role="status">${text[current]}</span></div>
     ${current === 'error' ? '<button type="button" class="text-button" data-action="cloud-retry">重试保存</button>' : ''}
     ${current === 'conflict' ? '<button type="button" class="text-button" data-action="cloud-refresh">读取云端</button>' : ''}
-    ${current === 'auth' ? `<a target="_top" href="${signIn()}">重新登录</a>` : ''}
+    ${current === 'auth' ? '<button type="button" class="text-button" data-action="show-login">重新登录</button>' : ''}
     ${['error','conflict','auth'].includes(current) && detail ? `<p>${escapeHtml(detail)}</p>` : ''}`;
 }
 
@@ -86,7 +97,7 @@ const routeDeviceId = () => location.hash.split('/')[2];
 
 function notify(message) {
   clearTimeout(statusTimer);
-  status.textContent = message.includes('已保存') && cloudStatus !== 'saved' ? '正在保存到云端。' : message;
+  status.textContent = message.includes('已保存') && cloudStatus !== 'saved' ? account?.guest ? '正在保存到本机。' : '正在保存到云端。' : message;
   status.classList.add('visible');
   statusTimer = window.setTimeout(() => status.classList.remove('visible'), 3700);
 }
@@ -264,7 +275,7 @@ function pinMarkup(pin) {
 }
 
 function photoBoard(photo, name, pin, editable = false) {
-  const image = `<img class="device-photo-image" src="${escapeHtml(photo)}" alt="${escapeHtml(name)}的按键照片">${pinMarkup(pin)}`;
+  const image = `<img class="device-photo-image" src="${escapeHtml(photoUrl(photo))}" alt="${escapeHtml(name)}的按键照片">${pinMarkup(pin)}`;
   return `<div class="photo-board">${editable ? `<button type="button" data-action="device-pin" class="photo-target" aria-label="在照片上标记按键" aria-describedby="device-pin-help">${image}</button>` : `<div class="photo-target">${image}</div>`}</div>`;
 }
 
@@ -499,6 +510,10 @@ function guideInteraction(action, button) {
 }
 
 function connectionsScreen() {
+  if (account.guest) return `${pageHeader('家庭连接', 'family')}<main class="surface connections">
+    <p class="empty-card">登录后可以连接家人，分享问题和设备卡。</p>
+    <button class="button" type="button" data-action="show-login">用邮箱登录</button>
+  </main>`;
   const links = family?.links ?? [];
   const items = family?.items ?? [];
   return `${pageHeader('家庭连接', 'family')}<main class="surface connections-screen">
@@ -518,19 +533,22 @@ function connectionsScreen() {
         ${item.direction === 'sent' ? `<button type="button" class="text-button" data-action="recall-share" data-id="${item.id}">撤回</button>` : ''}
       </article>`).join('')}</div>` : '<p class="empty-card">主动分享的问题和设备卡会显示在这里。</p>'}
     </section>
-    <div class="connection-account"><button class="text-button" type="button" data-action="reload-family">刷新家庭分享</button><a target="_top" class="text-button" href="${signOut}">退出登录</a></div>
+    <div class="connection-account"><button class="text-button" type="button" data-action="reload-family">刷新家庭分享</button><button class="text-button" data-action="account-signout" type="button">退出登录</button></div>
   </main>`;
 }
 
 let familyLoad;
 async function loadFamily() {
+  if (account?.guest) return;
+  const active = account;
   if (familyLoad) return familyLoad;
   familyBusy = true;
   familyError = '';
-  familyLoad = api('/api/family').then((data) => { family = data; }, (error) => { familyError = error.message; })
-    .finally(() => { familyLoad = null; familyBusy = false; });
+  familyLoad = api('/api/family').then((data) => { if (account === active) family = data; },
+    (error) => { if (account === active) familyError = error.message; })
+    .finally(() => { if (account === active) { familyLoad = null; familyBusy = false; } });
   await familyLoad;
-  if (['connections', 'shared-device'].includes(route)) render();
+  if (account === active && ['connections', 'shared-device'].includes(route)) render();
 }
 
 function actionError(error) {
@@ -547,6 +565,10 @@ function joinFamilyDialog() {
 }
 
 async function openShareItem(kind, id) {
+  if (account.guest) {
+    showDialog('登录后分享', '<p class="form-help">登录后可以把这条内容分享给已连接的家人。</p><button class="button wide" type="button" data-action="show-login">用邮箱登录</button>');
+    return;
+  }
   const item = kind === 'device' ? state.deviceGuides.find((entry) => entry.id === id)
     : state.messages.ask.find((entry) => entry.role === 'user' && entry.id === id);
   if (!item) return;
@@ -609,29 +631,143 @@ async function connectionAction(action, id, button) {
   finally { button.disabled = false; }
 }
 
-function cloudEntry(message = '', error = false) {
+function cloudEntry(message = '', values = {}) {
   accountBar.hidden = true;
+  const creating = formMode === 'create';
   app.innerHTML = `<header class="topbar"><span class="brand">${icon('home', 40)}禾伴</span></header>
-    <main class="surface cloud-entry"><h1>生活操作指引</h1><p>查看取件、查电费和设备使用步骤。登录后可以保存现场照片和提醒。</p>
-    ${message ? `<p class="${error ? 'form-error' : 'device-help'}" role="status">${escapeHtml(message)}</p>` : ''}
-    <a class="button wide" target="_top" href="${signIn()}">使用 ChatGPT 登录</a>
-    ${error ? '<button class="button quiet wide" type="button" data-action="cloud-reconnect">重新连接</button>' : ''}</main>`;
+    <main class="surface cloud-entry entry-choice"><h1 id="screen-title" tabindex="-1">${formMode ? creating ? '创建禾伴账户' : '用邮箱登录' : '生活操作指引'}</h1>
+    ${formMode ? `<p>用手机或电脑的指纹、面容或锁屏密码确认身份。</p>
+      <form class="sign-in-form" data-form="email-login">
+        ${creating ? `<label for="login-name">怎么称呼您？</label><input id="login-name" name="name" autocomplete="nickname" maxlength="40" value="${escapeHtml(values.name ?? '')}" required>` : ''}
+        <label for="login-email">邮箱</label><input id="login-email" name="email" type="email" inputmode="email" autocomplete="username" maxlength="254" value="${escapeHtml(values.email ?? '')}" required>
+        <p class="form-error" role="alert">${escapeHtml(message)}</p>
+        <button class="button" type="submit">${creating ? '确认设备并创建' : '确认设备并登录'}</button>
+      </form>
+      <button class="text-button" data-action="${creating ? 'login-existing' : 'login-create'}" type="button">${creating ? '已有禾伴账户？登录' : '第一次使用？创建账户'}</button>`
+      : `<p>取快递、查电费、拍下不会操作的画面。</p>
+      ${message ? `<p class="form-error" role="alert">${escapeHtml(message)}</p>` : ''}
+      <button class="button" type="button" data-action="continue-guest">跳过登录</button>
+      <button class="button quiet" type="button" data-action="login-create">用邮箱继续</button>
+      <p class="form-help">跳过后，提醒和照片保存在当前浏览器。</p>`}
+    ${formMode ? '<button class="text-button" data-action="continue-guest" type="button">跳过登录</button>' : ''}
+    ${account ? '<button class="text-button" type="button" data-action="close-login">返回</button>' : ''}
+    <details class="old-account"><summary>找回旧版记录</summary><a href="${legacySignIn}" target="_top">打开旧版账户</a></details>
+    </main>`;
 }
 
-async function startCloud() {
-  cloudEntry('正在读取账户…');
+async function startCloud(mode) {
+  const switching = Boolean(authMode && mode !== authMode);
+  const result = await connectCloud(updateCloudStatus, mode);
+  account = result.user;
+  authMode = mode;
+  account = mode === 'legacy' ? { ...account, legacy: true } : account;
+  state = { ...newState(), ...result.state };
+  family = null;
+  familyLoad = null;
+  familyError = '';
+  familyBusy = false;
+  invite = null;
+  formMode = '';
+  authPanel = false;
+  accessPreference(mode);
+  if (location.hash === '#/legacy') {
+    history.replaceState(null, '', '#/connections');
+    route = readRoute();
+  } else if (switching) {
+    const destination = { record: 'records', 'shared-device': 'connections', 'device-editor': 'family-devices' }[route];
+    if (destination) {
+      history.replaceState(null, '', `#/${destination}`);
+      route = readRoute();
+    }
+  }
+  updateCloudStatus('saved');
+  enterScreen(true);
+}
+
+async function boot() {
+  let locked = false;
   try {
-    const result = await connectCloud(updateCloudStatus);
-    account = result.user;
-    state = { ...newState(), ...result.state };
-    updateCloudStatus('saved');
-    enterScreen();
+    const choice = accessPreference();
+    const old = location.hash === '#/legacy' || choice === 'legacy';
+    const mode = old ? 'legacy' : choice === 'guest' ? 'guest' : (await api('/api/auth/session')).signedIn ? 'account' : '';
+    if (authBusy || (!old && (authPanel || account))) return;
+    authBusy = locked = true;
+    if (mode) await startCloud(mode);
   } catch (error) {
-    cloudEntry(error.status === 401 ? '' : error.message || '暂时连接不上，请重试。', error.status !== 401);
+    if (locked || !authPanel && !account) cloudEntry(error.status === 401 ? '' : error.message);
+  } finally {
+    if (locked) authBusy = false;
+  }
+}
+
+async function flushBeforeSwitch() {
+  if (unsyncedCloud() && !await flushCloud() && cloudStatus !== 'auth') throw new Error('还有内容没有保存，请先重试保存。');
+}
+
+async function chooseAccess(action, button) {
+  if (authBusy) return;
+  if (action === 'show-login' || action === 'login-create' || action === 'login-existing') {
+    const values = { name: document.querySelector('#login-name')?.value, email: document.querySelector('#login-email')?.value };
+    if (dialog.open) dialog.close();
+    authPanel = true;
+    records.stopCamera();
+    formMode = action === 'login-existing' ? 'login' : 'create';
+    cloudEntry('', values);
+    document.querySelector('#screen-title')?.focus();
+    return;
+  }
+  if (action === 'close-login') {
+    authPanel = false;
+    updateCloudStatus(cloudStatus);
+    enterScreen(true);
+    return;
+  }
+  authBusy = true;
+  button.disabled = true;
+  try {
+    if (action === 'continue-guest') {
+      await flushBeforeSwitch();
+      await startCloud('guest');
+    } else if (action === 'account-signout') {
+      await flushBeforeSwitch();
+      if (authMode === 'account') await api('/api/auth/logout', 'POST');
+      accessPreference('');
+      account = null;
+      authMode = '';
+      authPanel = true;
+      records.close();
+      formMode = '';
+      cloudEntry();
+    }
+  } catch (error) {
+    notify(error.message);
+  } finally {
+    authBusy = false;
+    button.disabled = false;
+  }
+}
+
+async function submitEmailLogin(form, data) {
+  if (authBusy) return;
+  authBusy = true;
+  const button = form.querySelector('button[type="submit"]');
+  const errorField = form.querySelector('.form-error');
+  button.disabled = true;
+  errorField.textContent = '';
+  try {
+    await flushBeforeSwitch();
+    await signInWithDevice(api, formMode, { email: data.get('email'), name: data.get('name') });
+    await startCloud('account');
+  } catch (error) {
+    errorField.textContent = error.message;
+  } finally {
+    authBusy = false;
+    button.disabled = false;
   }
 }
 
 function render() {
+  if (authPanel) return;
   const screens = {
     elder: elderHome, family: familyHome, chat: () => chatScreen('chat'), ask: () => chatScreen('ask'),
     'family-chat': () => chatScreen('family-chat'), reminders: () => remindersScreen('elder'),
@@ -768,7 +904,7 @@ function refresh(message) {
 }
 
 function checkReminders() {
-  if (document.visibilityState !== 'visible' || route === 'capture') return;
+  if (authPanel || document.visibilityState !== 'visible' || route === 'capture') return;
   const owner = elderRoutes.includes(route) ? 'elder' : 'family';
   const due = state.reminders.find((item) => item.owner === owner && !item.done && !item.notified && item.at <= Date.now());
   if (!due || dialog.open) return;
@@ -782,7 +918,10 @@ document.addEventListener('click', (event) => {
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const { action, id, text } = button.dataset;
-  if (action === 'cloud-reconnect') { void startCloud(); return; }
+  if (['show-login', 'login-create', 'login-existing', 'continue-guest', 'close-login', 'account-signout'].includes(action)) {
+    void chooseAccess(action, button);
+    return;
+  }
   if (!account) return;
   if (recordRoutes.includes(route) && action.startsWith('capture-')) { void records.action(action, button); return; }
   if (action === 'cloud-retry') { void flushCloud(); return; }
@@ -790,7 +929,7 @@ document.addEventListener('click', (event) => {
     showDialog('读取云端版本？', '<p class="form-help">本页尚未同步的修改将被放弃，账户会回到云端保存的版本。</p><button class="button wide" data-action="cloud-refresh-confirm" type="button">读取云端版本</button>');
     return;
   }
-  if (action === 'cloud-refresh-confirm') { dialog.close(); void startCloud(); return; }
+  if (action === 'cloud-refresh-confirm') { dialog.close(); void startCloud(authMode).catch((error) => notify(error.message)); return; }
   if (['invite-family','join-family','copy-invite','reload-family','remove-family','recall-share','confirm-remove-family','confirm-recall-share'].includes(action)) {
     void connectionAction(action, id, button);
     return;
@@ -924,6 +1063,7 @@ document.addEventListener('submit', (event) => {
   event.preventDefault();
   const data = new FormData(form);
   switch (form.dataset.form) {
+    case 'email-login': void submitEmailLogin(form, data); break;
     case 'scene-record': void records.save(data); break;
     case 'join-family':
     case 'share-family': void familyForm(form, data); break;
@@ -1054,6 +1194,8 @@ window.addEventListener('hashchange', () => {
   recognition?.abort();
   window.speechSynthesis?.cancel();
   route = readRoute();
+  if (location.hash === '#/legacy' && !authBusy) { void boot(); return; }
+  authPanel = false;
   enterScreen(true);
 });
 document.addEventListener('visibilitychange', () => {
@@ -1068,4 +1210,5 @@ window.addEventListener('beforeunload', (event) => {
   if (unsyncedCloud()) { event.preventDefault(); event.returnValue = ''; }
 });
 setInterval(() => { if (account) checkReminders(); }, 10_000);
-void startCloud();
+cloudEntry();
+void boot();

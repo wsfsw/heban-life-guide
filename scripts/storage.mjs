@@ -6,11 +6,10 @@ export async function localStorageBindings(folder) {
   if (folder) await mkdir(folder, { recursive: true });
   const sql = new DatabaseSync(folder ? join(folder, 'heban.sqlite') : ':memory:');
   sql.exec('PRAGMA foreign_keys = ON;');
-  if (!sql.prepare("select 1 from sqlite_master where type='table' and name='profiles'").get()) {
-    sql.exec(await readFile(new URL('../drizzle/0000_initial.sql', import.meta.url), 'utf8'));
-  }
-  if (!sql.prepare("select 1 from sqlite_master where type='table' and name='scene_records'").get()) {
-    sql.exec(await readFile(new URL('../drizzle/0001_scene_records.sql', import.meta.url), 'utf8'));
+  for (const [table, migration] of Object.entries({ profiles: '0000_initial', scene_records: '0001_scene_records', passkey_accounts: '0002_passkeys' })) {
+    if (!sql.prepare("select 1 from sqlite_master where type='table' and name=?").get(table)) {
+      sql.exec(await readFile(new URL(`../drizzle/${migration}.sql`, import.meta.url), 'utf8'));
+    }
   }
   const prepare = (statement) => {
     const query = sql.prepare(statement);

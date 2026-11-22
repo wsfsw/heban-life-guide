@@ -1,3 +1,5 @@
+import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
+
 class RequestError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
@@ -13,13 +15,13 @@ const phonePattern = /^\+?\d{5,18}$/;
 const lines = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const timestamp = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 4_102_444_800_000 ? value : null;
 const list = (value, max) => Array.isArray(value) ? value.slice(0, max) : [];
-const json = (data, status = 200) => new Response(JSON.stringify(data), {
-  status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), {
+  status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers },
 });
 
-function authenticatedUser(request) {
+function siteUser(request) {
   const id = request.headers.get('oai-authenticated-user-id');
-  if (!id || !safeId.test(id)) fail(401, '请先登录 ChatGPT。');
+  if (!id || !safeId.test(id)) return null;
   let name = request.headers.get('oai-authenticated-user-full-name') || '';
   if (request.headers.get('oai-authenticated-user-full-name-encoding') === 'percent-encoded-utf-8') {
     try { name = decodeURIComponent(name); } catch { name = ''; }
@@ -59,6 +61,94 @@ const randomCode = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), 
 const get = (db, sql, ...values) => db.prepare(sql).bind(...values).first();
 const all = async (db, sql, ...values) => (await db.prepare(sql).bind(...values).all()).results;
 const run = (db, sql, ...values) => db.prepare(sql).bind(...values).run();
+
+const sessionAge = 30 * 24 * 3600;
+const emailPattern = /^[^\s<>,;@"()]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}$/;
+const cookieName = (url) => url.protocol === 'https:' ? '__Host-heban_session' : 'heban_session';
+const sessionCookie = (url, value, age) => `${cookieName(url)}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${url.protocol === 'https:' ? '; Secure' : ''}`;
+const cookiePattern = /^[0-9a-f]{64}$/;
+
+function sessionToken(request, url) {
+  const prefix = cookieName(url) + '=';
+  const value = (request.headers.get('Cookie') ?? '').split(/;\s*/).find((item) => item.startsWith(prefix))?.slice(prefix.length);
+  return cookiePattern.test(value ?? '') ? value : null;
+}
+
+async function sessionUser(db, token) {
+  if (!token) return null;
+  return await get(db, `SELECT a.id, a.name FROM passkey_sessions s
+    JOIN passkey_accounts a ON a.id = s.account_id WHERE s.token_hash = ? AND s.expires_at > ?`, await digest(token), Date.now());
+}
+
+async function passkeyOptions(request, url, db) {
+  const { mode, name: proposedName, email: proposedEmail } = await readJson(request, 2100) ?? {};
+  const email = typeof proposedEmail === 'string' ? proposedEmail.trim().toLowerCase() : '';
+  const name = lines(proposedName, 40);
+  if (!['create', 'login'].includes(mode) || email.length > 254 || !emailPattern.test(email)) fail(422, '请输入有效的邮箱。');
+  if (mode === 'create' && !name) fail(422, '请输入想用的称呼。');
+  const now = Date.now();
+  await run(db, 'DELETE FROM passkey_requests WHERE expires_at <= ?', now);
+  const id = 'acct-' + crypto.randomUUID();
+  const options = mode === 'create'
+    ? await generateRegistrationOptions({
+      rpName: '禾伴', rpID: url.hostname, userID: new TextEncoder().encode(id),
+      userName: email, userDisplayName: name, timeout: 90_000, attestationType: 'none',
+      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+      supportedAlgorithmIDs: [-7, -257],
+    })
+    : await generateAuthenticationOptions({ rpID: url.hostname, userVerification: 'required', timeout: 90_000 });
+  const result = await run(db, `INSERT INTO passkey_requests (challenge, mode, email, name, account_id, expires_at)
+    SELECT ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM passkey_requests WHERE email = ?) < 12`,
+  options.challenge, mode, email, name, id, now + 120_000, email);
+  if (!result.meta.changes) fail(429, '操作太频繁，请稍等两分钟后再试。');
+  return json({ options });
+}
+
+async function issueSession(db, url, accountId, oldToken) {
+  const token = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
+  const now = Date.now();
+  const statements = [
+    db.prepare('DELETE FROM passkey_sessions WHERE expires_at <= ?').bind(now),
+    db.prepare('INSERT INTO passkey_sessions (token_hash, account_id, expires_at) VALUES (?, ?, ?)').bind(await digest(token), accountId, now + sessionAge * 1000),
+  ];
+  if (oldToken) statements.push(db.prepare('DELETE FROM passkey_sessions WHERE token_hash = ?').bind(await digest(oldToken)));
+  await db.batch(statements);
+  return json({ signedIn: true }, 200, { 'Set-Cookie': sessionCookie(url, token, sessionAge) });
+}
+
+async function verifyPasskey(request, url, db, token) {
+  const { challenge, response } = await readJson(request, 34_000) ?? {};
+  if (typeof challenge !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(challenge) ||
+      typeof response?.id !== 'string' || response.id.length > 2048) fail(400, '登录信息不完整，请重新开始。');
+  const pending = await get(db, 'DELETE FROM passkey_requests WHERE challenge = ? AND expires_at > ? RETURNING *', challenge, Date.now());
+  if (!pending) fail(400, '这次确认已经结束，请重新开始。');
+  const expected = { response, expectedChallenge: challenge, expectedOrigin: url.origin, expectedRPID: url.hostname, requireUserVerification: true };
+  if (pending.mode === 'create') {
+    let verified;
+    try { verified = await verifyRegistrationResponse(expected); }
+    catch { fail(401, '设备未能完成确认，请重新试一次。'); }
+    if (!verified.verified) fail(401, '设备未能完成确认，请重新试一次。');
+    const { id, publicKey, counter } = verified.registrationInfo.credential;
+    const publicKeyEncoded = btoa(String.fromCharCode(...publicKey));
+    const saved = await run(db, 'INSERT OR IGNORE INTO passkey_accounts VALUES (?, ?, ?, ?, ?, ?)',
+      pending.account_id, pending.email, pending.name, id, publicKeyEncoded, counter);
+    if (!saved.meta.changes) fail(409, '这个设备凭据已有账户，请选择登录。');
+    return issueSession(db, url, pending.account_id, token);
+  }
+  const account = await get(db, 'SELECT * FROM passkey_accounts WHERE credential_id = ? AND email = ?', response.id, pending.email);
+  if (!account) fail(401, '这个设备凭据与您填的邮箱不一致。请检查邮箱后重试。');
+  const credential = { id: account.credential_id, publicKey: Uint8Array.from(atob(account.public_key), (char) => char.charCodeAt(0)), counter: account.counter };
+  let verified;
+  try { verified = await verifyAuthenticationResponse({ ...expected, credential }); }
+  catch { fail(401, '设备未能完成确认，请重新试一次。'); }
+  if (!verified.verified) fail(401, '设备未能完成确认，请重新试一次。');
+  if (verified.authenticationInfo.newCounter !== account.counter) {
+    const updated = await run(db, 'UPDATE passkey_accounts SET counter = ? WHERE id = ? AND counter = ?',
+      verified.authenticationInfo.newCounter, account.id, account.counter);
+    if (!updated.meta.changes) fail(409, '账户正在另一台设备登录，请重新确认。');
+  }
+  return issueSession(db, url, account.id, token);
+}
 
 async function ownedProfile(db, user) {
   const current = await get(db, 'SELECT display_name, revision, state FROM profiles WHERE user_id = ?', user.id);
@@ -203,12 +293,24 @@ async function routeApi(request, env) {
   const url = new URL(request.url);
   const { pathname } = url;
   const method = request.method;
-  const user = authenticatedUser(request);
   if (!env.DB || !env.BUCKET) fail(503, '云端存储尚未就绪，请稍后重试。');
   if (!['GET', 'HEAD'].includes(method)) {
     if (request.headers.get('origin') !== url.origin) fail(403, '请从禾伴页面操作。');
   }
   const db = env.DB;
+  const token = sessionToken(request, url);
+  if (pathname === '/api/auth/options' && method === 'POST') return passkeyOptions(request, url, db);
+  if (pathname === '/api/auth/verify' && method === 'POST') return verifyPasskey(request, url, db, token);
+  if (pathname === '/api/auth/logout' && method === 'POST') {
+    if (token) await run(db, 'DELETE FROM passkey_sessions WHERE token_hash = ?', await digest(token));
+    return json({ signedIn: false }, 200, { 'Set-Cookie': sessionCookie(url, '', 0) });
+  }
+  if (pathname === '/api/auth/session' && method === 'GET') return json({ signedIn: Boolean(await sessionUser(db, token)) });
+  const identity = url.searchParams.get('identity');
+  const legacy = request.headers.get('X-Heban-Legacy') === '1' || method === 'GET' && identity === 'legacy';
+  const accountOnly = request.headers.get('X-Heban-Account') === '1' || method === 'GET' && identity === 'account';
+  const user = legacy ? siteUser(request) : await sessionUser(db, token) ?? (accountOnly ? null : siteUser(request));
+  if (!user) fail(401, '请登录禾伴。');
   if (pathname === '/api/records' && method === 'GET') {
     const entries = await all(db, `SELECT ${recordColumns} FROM scene_records WHERE owner_id = ? ORDER BY created_at DESC LIMIT 24`, user.id);
     return json({ records: entries.map(recordView) });

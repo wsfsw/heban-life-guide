@@ -5,7 +5,12 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "start": "node scripts/local.mjs",
-    "check": "node --check app.js && node --check records.js && node --check cloud.js && node --check api.js && node --check scripts/build.mjs && node --check scripts/local.mjs",
+    "check": "node --check app.js && node --check records.js && node --check cloud.js && node --check guest.js && node --check sign-in.js && node --check api.js && node --check scripts/build.mjs && node --check scripts/local.mjs",
     "test": "node --test tests/api.test.mjs"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "13.3.0",
+    "@simplewebauthn/server": "13.3.3",
+    "esbuild": "0.27.4"
   }
 }

@@ -9,7 +9,8 @@ const { default: worker } = await import('../dist/server/index.js');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const env = await localStorageBindings(resolve(root, '.local'));
 const port = Number(process.env.HEBAN_PORT || 4180);
-const origin = `http://127.0.0.1:${port}`;
+const host = process.env.HEBAN_HOST === 'localhost' ? 'localhost' : '127.0.0.1';
+const origin = `http://${host}:${port}`;
 const devUsers = { elder: '本机测试长辈', family: '本机测试家属' };
 
 const server = createServer(async (incoming, outgoing) => {
@@ -43,5 +44,5 @@ const server = createServer(async (incoming, outgoing) => {
     else outgoing.end();
   } catch { outgoing.writeHead(500).end('Local preview error'); }
 });
-server.listen(port, '127.0.0.1', () => console.log(`禾伴本地预览：${origin}`));
+server.listen(port, host, () => console.log(`禾伴本地预览：${origin}`));
 process.on('SIGINT', () => server.close(() => { env.close(); process.exitCode = 0; }));

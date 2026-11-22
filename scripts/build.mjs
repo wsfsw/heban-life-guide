@@ -1,4 +1,6 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 
 const output = new URL('../dist/server/', import.meta.url);
 const root = new URL('../', import.meta.url);
@@ -8,12 +10,18 @@ const types = {
   'styles.css': 'text/css; charset=utf-8',
   'app.js': 'text/javascript; charset=utf-8',
   'cloud.js': 'text/javascript; charset=utf-8',
+  'guest.js': 'text/javascript; charset=utf-8',
   'devices.js': 'text/javascript; charset=utf-8',
   'records.js': 'text/javascript; charset=utf-8',
   'guides.js': 'text/javascript; charset=utf-8',
   'logic.js': 'text/javascript; charset=utf-8',
 };
 const assets = Object.fromEntries(await Promise.all(Object.entries(types).map(async ([file, type]) => [`/${file}`, { type, body: await read(file) }])));
+const browser = await build({
+  entryPoints: [fileURLToPath(new URL('sign-in.js', root))], bundle: true,
+  platform: 'browser', format: 'esm', write: false, target: 'es2022',
+});
+assets['/sign-in.js'] = { type: types['app.js'], body: browser.outputFiles[0].text };
 const server = await read('api.js');
 const moduleText = server + '\nconst siteAssets = ' + JSON.stringify(assets) + ';\n' + `
 export default {
@@ -36,5 +44,9 @@ export default {
 };
 `;
 await mkdir(output, { recursive: true });
-await writeFile(new URL('index.js', output), moduleText);
+await build({
+  stdin: { contents: moduleText, resolveDir: fileURLToPath(root), sourcefile: 'heban-worker.js' },
+  bundle: true, platform: 'browser', format: 'esm', target: 'es2022',
+  outfile: fileURLToPath(new URL('index.js', output)),
+});
 console.log('Sites Worker built.');

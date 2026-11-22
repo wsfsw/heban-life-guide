@@ -1,4 +1,4 @@
-import { api } from './cloud.js';
+import { api, photoUrl } from './cloud.js';
 import { compressPhoto, readDevicePhoto } from './devices.js';
 import { formatWhen } from './logic.js';
 
@@ -9,7 +9,7 @@ const scenes = {
   other: { name: '其他生活场景', guide: 'guides', action: '查看生活操作指引' },
 };
 
-export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog, closeDialog, notify }) {
+export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog, closeDialog, notify, isGuest }) {
   let view = null;
   let camera = null;
 
@@ -54,7 +54,7 @@ export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog,
   }
 
   const captureLink = '<a class="button quiet" href="#/records">我的记录</a>';
-  const help = '<p class="capture-help">拍清楚卡住的画面，避开取件码、账号等个人信息。照片只保存在您的账户。</p>';
+  const help = () => `<p class="capture-help">拍清楚卡住的画面，避开取件码和账号。${isGuest() ? '照片保存在当前浏览器。' : '照片只保存在您的账户。'}</p>`;
   const filePicker = (id, label, native = false) => `<input type="file" id="${id}" class="capture-file" accept="image/*" ${native ? 'capture="environment"' : ''}><label for="${id}" class="button quiet capture-file-label">${icon(native ? 'camera' : 'photo', 21)}${label}</label>`;
 
   function captureScreen() {
@@ -88,7 +88,7 @@ export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog,
       </div>`;
     }
     return `${pageHeader('拍照取证', back)}<main class="surface capture-screen">
-      <div class="capture-intro"><div><h2>${mode === 'review' || mode === 'saving' ? '确认这张照片' : '拍下眼前的画面'}</h2>${help}</div>${captureLink}</div>
+      <div class="capture-intro"><div><h2>${mode === 'review' || mode === 'saving' ? '确认这张照片' : '拍下眼前的画面'}</h2>${help()}</div>${captureLink}</div>
       ${error ? `<p class="capture-error" role="alert">${escapeHtml(error)}</p>` : ''}
       ${body}
     </main>`;
@@ -96,12 +96,12 @@ export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog,
 
   function recordsScreen() {
     return `${pageHeader('我的记录', 'elder')}<main class="surface capture-screen">
-      <div class="capture-intro"><div><h2>现场照片</h2><p class="capture-help">只有您登录后可以查看。</p></div><a class="button" href="#/capture">${icon('camera', 22)}拍照取证</a></div>
+      <div class="capture-intro"><div><h2>现场照片</h2><p class="capture-help">${isGuest() ? '这些照片保存在当前浏览器。' : '只有您登录后可以查看。'}</p></div><a class="button" href="#/capture">${icon('camera', 22)}拍照取证</a></div>
       ${view.loading ? '<p role="status" class="empty-card">正在读取记录…</p>'
         : view.error ? retry()
         : !view.records.length ? '<p class="empty-card">还没有照片。遇到不会操作的画面，可以拍一张留着。</p>'
         : `<ul class="record-list">${view.records.map((record) => `<li><a href="#/record/${encodeURIComponent(record.id)}">
-          <img src="${escapeHtml(record.photo)}" alt="" loading="lazy"><span><strong>${scenes[record.scene].name}</strong>
+          <img src="${escapeHtml(photoUrl(record.photo))}" alt="" loading="lazy"><span><strong>${scenes[record.scene].name}</strong>
           <span>${escapeHtml(formatWhen(record.createdAt))}</span>${record.note ? `<span>${escapeHtml(record.note)}</span>` : ''}</span></a></li>`).join('')}</ul>`}
     </main>`;
   }
@@ -117,7 +117,7 @@ export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog,
       ${loading ? '<p role="status" class="empty-card">正在读取照片…</p>' : !record ? retry() : `
         <div class="capture-intro"><div><h2>${scene.name}</h2><p class="capture-help">保存于 ${escapeHtml(formatWhen(record.createdAt))}</p></div></div>
         ${error ? `<p class="capture-error" role="alert">${escapeHtml(error)}</p>` : ''}
-        <img class="capture-frame" src="${escapeHtml(record.photo)}" alt="保存的现场照片">
+        <img class="capture-frame" src="${escapeHtml(photoUrl(record.photo))}" alt="保存的现场照片">
         ${record.note ? `<p class="record-note">${escapeHtml(record.note)}</p>` : ''}
         <div class="capture-actions"><a class="button" href="#/${scene.guide}">${scene.action}</a><button class="button quiet" type="button" data-action="capture-delete">删除记录</button></div>`}
     </main>`;
@@ -202,7 +202,7 @@ export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog,
       const { record } = await api('/api/records', 'POST', { scene: current.scene, note: current.note, photo: current.photo, source: current.source });
       if (view !== current) return;
       location.hash = `#/record/${record.id}`;
-      notify('现场照片已存入您的账户。');
+      notify(isGuest() ? '现场照片已保存到本机。' : '现场照片已存入您的账户。');
     } catch (error) {
       Object.assign(current, { mode: 'review', error: error.message });
       redraw(current, '#capture-save');

@@ -110,3 +110,25 @@ test('scene photos require sign-in, remain private to the owner and can be delet
   assert.equal(await env.BUCKET.get('evidence-' + record.id + '.jpg'), null);
   assert.deepEqual((await (await elder(route)).json()).records, []);
 });
+
+test('device sign-in rejects forged verification and one-time challenge replay', async (t) => {
+  const env = await localStorageBindings();
+  t.after(env.close);
+  const anonymous = client(env);
+  const path = '/api/auth/options';
+  const profile = { mode: 'create', name: '测试用户', email: 'test@example.test' };
+  assert.equal((await anonymous(path, 'POST', profile, 'https://other.test')).status, 403);
+  assert.equal((await anonymous(path, 'POST', { ...profile, email: 'bad' })).status, 422);
+  assert.deepEqual(await (await anonymous('/api/auth/session')).json(), { signedIn: false });
+  const created = await anonymous(path, 'POST', profile);
+  assert.equal(created.status, 200);
+  const { options } = await created.json();
+  assert.equal(options.rp.id, 'heban.test');
+  assert.equal(options.authenticatorSelection.userVerification, 'required');
+  const forged = { challenge: options.challenge, response: { id: 'forged', type: 'public-key' } };
+  const rejected = await anonymous('/api/auth/verify', 'POST', forged);
+  assert.equal(rejected.status, 401);
+  assert.equal(rejected.headers.has('Set-Cookie'), false);
+  assert.equal((await anonymous('/api/auth/verify', 'POST', forged)).status, 400);
+  assert.equal((await anonymous(statePath)).status, 401);
+});
