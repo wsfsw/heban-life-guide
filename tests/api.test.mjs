@@ -24,12 +24,14 @@ test('login, account isolation, revision conflicts and cross-origin protection',
   assert.equal((await elder(statePath, 'PUT', { revision: 0, state: {} }, 'https://other.test')).status, 403);
   const saved = await elder(statePath, 'PUT', { revision: 0, state: {
     reminders: [{ id: 'reminder-1', title: '买菜', at: Date.now() + 3600_000, owner: 'elder' }],
+    speechRate: 'faster',
     guideRuns: { parcel: { version: 1, screen: 'code', updatedAt: Date.now(), history: ['pick'], failed: 0 } },
   } });
   assert.equal(saved.status, 200);
   assert.equal((await saved.json()).revision, 1);
   const mine = await (await elder(statePath)).json();
   assert.equal(mine.state.reminders[0].title, '买菜');
+  assert.equal(mine.state.speechRate, 'faster');
   assert.equal(mine.state.guideRuns.parcel.screen, 'code');
   assert.deepEqual((await (await client(env, 'stranger')(statePath)).json()).state, {});
   assert.equal((await elder(statePath, 'PUT', { revision: 0, state: {} })).status, 409);

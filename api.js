@@ -1,4 +1,5 @@
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
+import { speechRates } from './logic.js';
 
 class RequestError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -267,6 +268,7 @@ async function cleanState(env, owner, source) {
     interests: lines(source.interests, 80), contactName: lines(source.contactName, 18) || '爸妈',
     phone: typeof source.phone === 'string' && phonePattern.test(source.phone) ? source.phone : '',
     listen: Boolean(source.listen), greeted: Boolean(source.greeted),
+    speechRate: Object.hasOwn(speechRates, source.speechRate) ? source.speechRate : 'normal',
     monitoring: Boolean(source.monitoring), quietDays: [1, 2, 3, 5, 7].includes(source.quietDays) ? source.quietDays : 3,
     lastSeen: source.monitoring ? timestamp(source.lastSeen) : null,
     reminders, shared, deviceGuides, guideRuns,

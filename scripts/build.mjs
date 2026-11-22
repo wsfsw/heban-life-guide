@@ -17,6 +17,10 @@ const types = {
   'logic.js': 'text/javascript; charset=utf-8',
 };
 const assets = Object.fromEntries(await Promise.all(Object.entries(types).map(async ([file, type]) => [`/${file}`, { type, body: await read(file) }])));
+for (const file of ['guide-kit.webp', 'voice-card.webp']) {
+  const path = 'assets/' + file;
+  assets['/' + path] = { type: 'image/webp', encoded: (await readFile(new URL(path, root))).toString('base64') };
+}
 const browser = await build({
   entryPoints: [fileURLToPath(new URL('sign-in.js', root))], bundle: true,
   platform: 'browser', format: 'esm', write: false, target: 'es2022',

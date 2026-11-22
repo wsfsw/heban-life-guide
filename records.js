@@ -81,11 +81,14 @@ export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog,
       body = `<p class="capture-status" role="status">${mode === 'opening' ? '正在打开相机，请留意相机权限提示。' : '正在读取照片…'}</p>
         <button class="button quiet" type="button" data-action="capture-reset">取消</button>`;
     } else {
-      body = `<div class="capture-actions">
-        <button id="capture-open" class="button" type="button" data-action="capture-open">${icon('camera', 22)}打开相机</button>
-        ${filePicker('capture-album', '从相册选择')}
-        ${native ? filePicker('capture-native', '用手机相机拍') : ''}
-      </div>`;
+      body = `<section class="capture-ready" aria-label="选择照片来源">
+        <img src="/assets/guide-kit.webp" width="520" height="434" alt="">
+        <div class="capture-actions">
+          <button id="capture-open" class="button" type="button" data-action="capture-open">${icon('camera', 22)}打开相机</button>
+          ${filePicker('capture-album', '从相册选择')}
+          ${native ? filePicker('capture-native', '用手机相机拍') : ''}
+        </div>
+      </section>`;
     }
     return `${pageHeader('拍照取证', back)}<main class="surface capture-screen">
       <div class="capture-intro"><div><h2>${mode === 'review' || mode === 'saving' ? '确认这张照片' : '拍下眼前的画面'}</h2>${help()}</div>${captureLink}</div>
@@ -95,7 +98,7 @@ export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog,
   }
 
   function recordsScreen() {
-    return `${pageHeader('我的记录', 'elder')}<main class="surface capture-screen">
+    return `${pageHeader('我的记录', 'mine')}<main class="surface capture-screen">
       <div class="capture-intro"><div><h2>现场照片</h2><p class="capture-help">${isGuest() ? '这些照片保存在当前浏览器。' : '只有您登录后可以查看。'}</p></div><a class="button" href="#/capture">${icon('camera', 22)}拍照取证</a></div>
       ${view.loading ? '<p role="status" class="empty-card">正在读取记录…</p>'
         : view.error ? retry()

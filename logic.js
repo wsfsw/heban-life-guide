@@ -1,14 +1,21 @@
 export const storageKey = 'heban-local-v1';
 
 export const personas = {
-  '小禾': { label: '温和陪聊', prefix: '慢慢来，' },
-  '小松': { label: '说话简洁', prefix: '' },
-  '暖暖': { label: '活泼亲切', prefix: '好呀，' },
+  '小禾': { label: '温和陪聊', prefix: '慢慢来，', preview: '您好，我是小禾。您慢慢说，我们一步一步来。' },
+  '小松': { label: '说话简洁', prefix: '', preview: '您好，我是小松。您说要做什么，我帮您找下一步。' },
+  '暖暖': { label: '活泼亲切', prefix: '好呀，', preview: '您好，我是暖暖。今天想聊点什么？' },
+};
+
+export const speechRates = {
+  slow: { label: '慢', value: 0.7 },
+  normal: { label: '标准', value: 0.9 },
+  faster: { label: '较快', value: 1.1 },
+  fast: { label: '快', value: 1.3 },
 };
 
 export function newState() {
   return {
-    persona: '小禾', interests: '', contactName: '爸妈', phone: '', listen: false,
+    persona: '小禾', speechRate: 'normal', interests: '', contactName: '爸妈', phone: '', listen: false,
     monitoring: false, quietDays: 3, lastSeen: null, greeted: false,
     reminders: [], shared: [], deviceGuides: [], guideRuns: {}, messages: { chat: [], ask: [], 'family-chat': [] },
   };

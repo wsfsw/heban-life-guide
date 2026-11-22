@@ -1,5 +1,5 @@
 import {
-  personas, newState, localDate, localTime, formatWhen, inactiveDays,
+  personas, speechRates, newState, localDate, localTime, formatWhen, inactiveDays,
   reminderOrder, finishReminder, parseReminder, topics, answerFor, calendarFile,
 } from './logic.js';
 import { deviceLessons, readDevicePhoto } from './devices.js';
@@ -13,8 +13,8 @@ const dialog = document.querySelector('#dialog');
 const status = document.querySelector('#status');
 const accountBar = document.querySelector('#account-bar');
 const recordRoutes = ['capture', 'records', 'record'];
-const routes = ['elder', 'family', 'chat', 'ask', 'reminders', 'family-chat', 'family-reminders', 'devices', 'device', 'family-devices', 'device-editor', 'guides', 'guide', 'connections', 'shared-device', ...recordRoutes];
-const elderRoutes = ['elder', 'chat', 'ask', 'reminders', 'devices', 'device', 'guides', 'guide', 'shared-device', ...recordRoutes];
+const routes = ['elder', 'family', 'chat', 'ask', 'reminders', 'family-chat', 'family-reminders', 'devices', 'device', 'family-devices', 'device-editor', 'guides', 'guide', 'connections', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes];
+const elderRoutes = ['elder', 'chat', 'ask', 'reminders', 'devices', 'device', 'guides', 'guide', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes];
 const voices = window.SpeechRecognition || window.webkitSpeechRecognition;
 const longDate = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
 const repeats = { never: '只提醒一次', daily: '每天提醒', weekly: '每周提醒' };
@@ -75,6 +75,7 @@ function accessPreference(value) {
 function updateCloudStatus(current, detail = '') {
   cloudStatus = current;
   if (!account || authPanel) return;
+  accountBar.dataset.state = current;
   const text = { saving: '正在保存', saved: account.guest ? account.temporary ? '本次访问有效' : '已保存到本机' : '已云端保存', error: '保存失败', conflict: '另一台设备有更新', auth: '登录已失效' };
   accountBar.hidden = false;
   accountBar.innerHTML = `<div>${account.guest ? '<span>游客</span><button type="button" class="text-button" data-action="show-login">用邮箱登录</button>' : `<a href="#/connections">${escapeHtml(account.name)}</a>`}<span class="sync-label" role="status">${text[current]}</span></div>
@@ -109,14 +110,14 @@ function noteActivity() {
   }
 }
 
-function speak(text) {
+function speak(text, rate = state.speechRate) {
   if (!('speechSynthesis' in window)) {
     notify('这台浏览器暂不支持朗读。');
     return;
   }
   const speech = new SpeechSynthesisUtterance(text);
   speech.lang = 'zh-CN';
-  speech.rate = 0.9;
+  speech.rate = speechRates[rate]?.value ?? speechRates.normal.value;
   speech.onerror = (event) => {
     if (event.error !== 'interrupted' && event.error !== 'canceled') notify('暂时无法朗读，请检查设备的语音设置。');
   };
@@ -124,17 +125,17 @@ function speak(text) {
   window.speechSynthesis.speak(speech);
 }
 
-const settings = (action, label) => `<button class="icon-button" type="button" data-action="${action}" aria-label="${label}">${icon('tune', 23)}</button>`;
+const settings = (back = 'ask') => `<a class="icon-button" href="#/assistant-settings/${back}" aria-label="助手设置">${icon('tune', 23)}</a>`;
 function homeHeader(owner) {
   const isFamily = owner === 'family';
-  return `<header class="topbar"><a class="brand" href="#/${owner}">${icon('home', 42)}<span>禾伴</span></a>
-    <div class="toolbar">${isFamily ? '' : settings('persona', '助手设置')}
+  return `<header class="topbar home-bar"><a class="brand" href="#/${owner}"><span class="brand-mark">${icon('home', 25)}</span><span>禾伴</span></a>
+    <div class="toolbar">${isFamily ? '' : settings('elder')}
       <a class="role-link" href="#/${isFamily ? 'elder' : 'family'}">${icon('people', 22)}${isFamily ? '长辈端' : '家属端'}</a>
     </div></header>`;
 }
 
 function pageHeader(title, owner, extra = '') {
-  const backLabel = { family: '家属端', devices: '家里设备', 'family-devices': '设备卡列表', guides: '生活操作指引', connections: '家庭连接', ask: '助手', records: '我的记录', 'guide/parcel': '快递柜取件指引', 'guide/bill': '查电费指引' }[owner] ?? '长辈端';
+  const backLabel = { family: '家属端', devices: '家里设备', 'family-devices': '设备卡列表', guides: '生活操作指引', connections: '家庭连接', ask: '助手', chat: '聊天', mine: '我的', records: '我的记录', 'guide/parcel': '快递柜取件指引', 'guide/bill': '查电费指引' }[owner] ?? '长辈端';
   return `<header class="topbar subbar"><a class="icon-button" href="#/${owner}" aria-label="返回${backLabel}">${icon('back')}</a><h1 id="screen-title" tabindex="-1">${title}</h1>${extra}<span class="subbar-space" aria-hidden="true"></span></header>`;
 }
 
@@ -145,37 +146,63 @@ function tile({ link, action, title, subtitle, glyph, tone = 'sage', prominent =
     <span class="tile-icon ${tone}">${icon(glyph, 30)}</span><span class="tile-text"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(subtitle)}</span></span>${icon('right', 23)}</${tag}>`;
 }
 
+const quickCards = [
+  { link: 'ask', title: '问问助手', subtitle: '打字或用语音问', glyph: 'chat', color: 'blue' },
+  { link: 'guide/parcel', title: '快递柜取件', subtitle: '找到取件入口', glyph: 'parcel', color: 'peach' },
+  { link: 'guide/bill', title: '查本期电费', subtitle: '看账单和缴费记录', glyph: 'bill', color: 'lilac' },
+  { link: 'devices', title: '家里设备', subtitle: '看图找按键', glyph: 'remote', color: 'mint' },
+];
+
+function featureCard({ link, title, subtitle, glyph, color = 'blue' }) {
+  return `<a class="feature-card tone-${color}" href="#/${link}">
+    <span class="feature-icon">${icon(glyph, 28)}</span>
+    <span class="feature-text"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(subtitle)}</span></span>
+  </a>`;
+}
+
 function elderHome() {
   const next = reminderOrder(state.reminders, 'elder').find((item) => !item.done && item.at > Date.now());
   return `${homeHeader('elder')}<main class="surface home-screen">
     <div class="home-heading"><h1 id="screen-title" tabindex="-1">生活帮手</h1><p class="date">${longDate.format(new Date())}</p></div>
-    <div class="home-layout">
-      <div class="home-main">
-        <section class="home-capture" aria-labelledby="capture-home-title">
-          <h2 id="capture-home-title">操作卡住了？</h2>
-          <p>拍下报错提示或操作界面，方便以后查看。</p>
-          <div class="home-capture-actions">
-            <a class="button home-camera-button" href="#/capture/other/home">${icon('camera', 23)}拍照取证</a>
-            <a class="section-link" href="#/records">我的记录</a>
-          </div>
-        </section>
-        <section aria-labelledby="home-guides-title">
-          <div class="section-heading"><h2 id="home-guides-title">生活操作指引</h2></div>
-          <div class="home-actions">
-            ${tile({ link: 'guide/parcel', title: '快递柜取件', subtitle: '找取件入口、打开柜门', glyph: 'parcel' })}
-            ${tile({ link: 'guide/bill', title: '查本期电费', subtitle: '找到账单和缴费记录', glyph: 'bill' })}
-          </div>
-        </section>
-      </div>
-      <section class="home-tools" aria-labelledby="home-tools-title">
-        <div class="section-heading"><h2 id="home-tools-title">常用功能</h2></div>
-        <div class="home-actions">
-          ${tile({ link: 'ask', title: '问问助手', subtitle: '手机、出门和日常小事', glyph: 'question' })}
-          ${tile({ link: 'devices', title: '学用家里设备', subtitle: '看图找按键', glyph: 'remote' })}
-          ${tile({ link: 'reminders', title: '设置提醒', subtitle: next ? `${formatWhen(next.at)}　${next.title}` : '还没有待办提醒', glyph: 'bell' })}
-          ${tile({ link: 'chat', title: '聊聊天', subtitle: state.greeted ? '' : '有一条新问候', glyph: 'chat' })}
-        </div>
-      </section>
+    <section class="feature-banner home-capture" aria-labelledby="capture-home-title">
+      <div class="banner-copy"><h2 id="capture-home-title">操作卡住了？</h2><p>拍下现场，稍后再看。</p>
+      <a class="button home-camera-button" href="#/capture/other/home">${icon('camera', 23)}拍照取证</a></div>
+      <img src="/assets/guide-kit.webp" width="520" height="434" alt="" fetchpriority="high">
+    </section>
+    <section class="tool-section" aria-labelledby="home-tools-title">
+      <div class="section-heading"><h2 id="home-tools-title">常用功能</h2><a class="section-link" href="#/records">我的记录</a></div>
+      <div class="feature-grid">${quickCards.map(featureCard).join('')}</div>
+    </section>
+    <div class="app-list home-shortcuts">
+      ${tile({ link: 'reminders', title: '设置提醒', subtitle: next ? `${formatWhen(next.at)}　${next.title}` : '记下接下来要做的事', glyph: 'bell' })}
+    </div>
+  </main>`;
+}
+
+function bottomNav() {
+  const tabs = [
+    { link: 'elder', label: '首页', glyph: 'home', pages: ['elder'] },
+    { link: 'ask', label: '助手', glyph: 'chat', pages: ['ask', 'chat', 'assistant-settings', 'capture'] },
+    { link: 'guides', label: '指引', glyph: 'bill', pages: ['guides', 'guide', 'devices', 'device'] },
+    { link: 'mine', label: '我的', glyph: 'people' },
+  ];
+  const selected = tabs.find((tab) => tab.pages?.includes(route))?.link ?? 'mine';
+  return `<nav class="app-nav" aria-label="主导航">${tabs.map(({ link, label, glyph }) => `
+    <a href="#/${link}" ${selected === link ? 'aria-current="page"' : ''}><span>${icon(glyph, 24)}</span>${label}</a>`).join('')}
+  </nav>`;
+}
+
+function mineScreen() {
+  return `${pageHeader('我的', 'elder')}<main class="surface mine-screen">
+    <div class="profile-card tone-blue"><span class="feature-icon">${icon('people', 28)}</span>
+      <div><h2>${escapeHtml(account.name)}</h2><p>${account.guest ? account.temporary ? '本次浏览可用' : '记录保存在当前浏览器' : '记录保存到云端'}</p></div>
+      ${account.guest ? '<button class="button" data-action="show-login" type="button">登录</button>' : '<button class="button quiet" data-action="account-signout" type="button">退出登录</button>'}
+    </div>
+    <div class="app-list">
+      ${tile({ link: 'records', title: '我的记录', subtitle: '查看保存的现场照片', glyph: 'photo' })}
+      ${tile({ link: 'reminders', title: '我的提醒', subtitle: '查看和管理提醒', glyph: 'bell' })}
+      ${tile({ link: 'assistant-settings/mine', title: '助手设置', subtitle: '选择回复风格和语速', glyph: 'tune' })}
+      ${tile({ link: 'family', title: '家属端', subtitle: '联系家人、制作设备卡', glyph: 'heart' })}
     </div>
   </main>`;
 }
@@ -193,11 +220,11 @@ function familyHome() {
     <button class="care-card ${overdue ? 'care-warn' : ''}" type="button" data-action="care"><span class="care-icon">${icon('heart', 42)}</span>
       <span><strong>${demoLastSeen ? '关怀状态 · 演示' : '关怀状态'}</strong><span>${activity}</span></span>${icon('right', 22)}</button>
     <div class="contact-card"><span class="tile-icon apricot">${icon('phone', 30)}</span><span class="tile-text"><strong>给${escapeHtml(state.contactName)}打电话</strong><span>${callReminder ? `${formatWhen(callReminder.at)} 有联系提醒` : '选个时间，打个电话'}</span></span>${phoneAction}</div>
-    <div class="home-actions">
-      ${tile({ link: 'connections', title: '家庭连接', subtitle: '连接家人，查看主动分享的内容', glyph: 'people' })}
-      ${tile({ link: 'family-reminders', title: '联系提醒', subtitle: '设置打电话的时间', glyph: 'calendar' })}
-      ${tile({ link: 'family-devices', title: '给长辈做设备卡', subtitle: '用家里的照片标出操作步骤', glyph: 'photo' })}
-      ${tile({ link: 'family-chat', title: '跟助手聊聊', subtitle: '想想怎么关心家人', glyph: 'chat' })}
+    <div class="feature-grid family-tools">
+      ${featureCard({ link: 'connections', title: '家庭连接', subtitle: '连接家人和查看分享', glyph: 'people', color: 'blue' })}
+      ${featureCard({ link: 'family-reminders', title: '联系提醒', subtitle: '记下打电话的时间', glyph: 'calendar', color: 'peach' })}
+      ${featureCard({ link: 'family-devices', title: '制作设备卡', subtitle: '在照片上标出按键', glyph: 'photo', color: 'mint' })}
+      ${featureCard({ link: 'family-chat', title: '跟助手聊聊', subtitle: '聊聊怎么关心家人', glyph: 'chat', color: 'lilac' })}
     </div>
     ${state.phone ? '<button class="text-button" type="button" data-action="contact">修改联系人号码</button>' : ''}
   </main>`;
@@ -214,9 +241,13 @@ function chatScreen(mode) {
   const greeting = config.greeting.replace('{name}', state.persona);
   const messages = [{ role: 'assistant', text: greeting }, ...state.messages[mode]];
   const toggle = `<button class="listen" data-action="listen" type="button" aria-pressed="${state.listen}">${icon('sound', 20)}听回复<span class="switch" aria-hidden="true"></span></button>`;
-  const owner = mode === 'family-chat' ? 'family' : 'elder';
-  return `${pageHeader(config.title, owner, toggle)}<main class="surface conversation" data-mode="${mode}">
-    ${mode === 'ask' ? `<nav class="assistant-tools" aria-label="助手工具"><a class="button" href="#/capture">${icon('camera', 22)}拍照取证</a><a class="button quiet" href="#/records">我的记录</a></nav>` : ''}
+  const familyMode = mode === 'family-chat';
+  return `${pageHeader(config.title, familyMode ? 'family' : 'elder', `<div class="toolbar chat-controls">${toggle}${familyMode ? '' : settings(mode)}</div>`)}<main class="surface conversation" data-mode="${mode}">
+    ${familyMode ? '' : `<nav class="assistant-tabs" aria-label="助手模式"><a href="#/ask" ${mode === 'ask' ? 'aria-current="page"' : ''}>生活问答</a><a href="#/chat" ${mode === 'chat' ? 'aria-current="page"' : ''}>聊聊天</a></nav>
+      <div class="assistant-tools" aria-label="助手工具">
+        ${featureCard({ link: 'capture', title: '拍照取证', subtitle: '拍下现场画面', glyph: 'camera', color: 'blue' })}
+        ${featureCard({ link: 'records', title: '我的记录', subtitle: '看现场照片', glyph: 'photo', color: 'lilac' })}
+      </div>`}
     <div class="message-list" role="log" aria-label="聊天记录">${messages.map(renderMessage).join('')}</div>
     <div class="composer-area">
       <div class="examples" aria-label="常用说法">${config.examples.map((example) => `<button class="example" type="button" data-action="example" data-text="${escapeHtml(example)}">${escapeHtml(example)}</button>`).join('')}</div>
@@ -421,12 +452,15 @@ function saveDeviceGuide(form) {
 
 function guidesScreen() {
   return `${pageHeader('生活操作指引', 'elder')}<main class="surface guides-screen">
-    <h2>您现在想做什么？</h2>
-    <div class="stack">${lifeGuides.map((guide) => {
+    <div class="section-heading"><h2>选一件事，跟着做</h2></div>
+    <div class="feature-grid">${lifeGuides.map((guide) => {
       const run = readGuideRun(guide, state.guideRuns[guide.id]);
       const inProgress = guide.steps[run.screen]?.title ?? (run.screen === 'help' ? '找人帮忙' : '');
-      return tile({ link: `guide/${guide.id}`, title: guide.title, subtitle: inProgress ? `继续：${inProgress}` : guide.summary, glyph: guide.icon, tone: guide.id === 'parcel' ? 'apricot' : 'sage' });
-    }).join('')}</div>
+      return featureCard({ link: `guide/${guide.id}`, title: guide.title, subtitle: inProgress ? `继续：${inProgress}` : guide.summary, glyph: guide.icon, color: guide.id === 'parcel' ? 'peach' : 'lilac' });
+    }).join('')}
+      ${featureCard(quickCards[3])}
+      ${featureCard({ link: 'capture', title: '拍照取证', subtitle: '拍下卡住的画面', glyph: 'camera', color: 'blue' })}
+    </div>
     <p class="device-help">这里是操作演示。实际画面以现场设备或官方服务为准。</p>
   </main>`;
 }
@@ -774,9 +808,9 @@ function render() {
     'family-reminders': () => remindersScreen('family'), devices: devicesScreen, device: deviceScreen,
     'family-devices': familyDevicesScreen, 'device-editor': deviceEditorScreen, guides: guidesScreen, guide: guideScreen,
     connections: connectionsScreen, 'shared-device': deviceScreen,
-    capture: records.captureScreen, records: records.recordsScreen, record: records.recordScreen,
+    capture: records.captureScreen, records: records.recordsScreen, record: records.recordScreen, 'assistant-settings': assistantSettings, mine: mineScreen,
   };
-  app.innerHTML = screens[route]();
+  app.innerHTML = screens[route]() + bottomNav();
 }
 
 function showDialog(title, body) {
@@ -808,9 +842,27 @@ function showCare() {
     <button class="button quiet wide" type="button" data-action="demo-care">${demoLastSeen ? '结束提醒演示' : '预览未使用提醒'}</button></form>`);
 }
 
-function showPersona() {
-  showDialog('助手设置', `<form data-form="persona"><label for="persona">选一个聊天助手</label><select id="persona" name="persona">${Object.entries(personas).map(([name, info]) => `<option value="${name}" ${name === state.persona ? 'selected' : ''}>${name} · ${info.label}</option>`).join('')}</select>
-    <label for="interests">喜欢聊的话题</label><input id="interests" name="interests" placeholder="比如：种花、做饭、听戏" value="${escapeHtml(state.interests)}" maxlength="80"><p class="form-help">可写几个词，助手聊天时会提起您喜欢的话题。</p><button class="button wide" type="submit">保存设置</button></form>`);
+function assistantSettings() {
+  const origin = routeDeviceId();
+  const back = ['ask', 'chat', 'elder', 'mine'].includes(origin) ? origin : 'ask';
+  return `${pageHeader('选择助手', back)}<main class="surface assistant-settings">
+    <form data-form="persona">
+      <fieldset><legend>回复风格</legend><div class="persona-options">${Object.entries(personas).map(([name, info], i) => `
+        <label class="option-card"><input type="radio" name="persona" value="${name}" ${state.persona === name ? 'checked' : ''} required>
+          <span class="feature-icon tone-${['blue', 'mint', 'lilac'][i]}">${icon('chat', 23)}</span><strong>${name}</strong><span>${info.label}</span>
+        </label>`).join('')}</div></fieldset>
+      <section class="feature-banner voice-banner">
+        <div class="banner-copy"><p class="persona-preview" aria-live="polite">${personas[state.persona].preview}</p>
+          <button class="button quiet" type="button" data-action="preview-persona">${icon('sound', 21)}试听</button></div>
+        <img src="/assets/voice-card.webp" alt="" width="480" height="480">
+      </section>
+      <fieldset><legend>朗读语速</legend><div class="rate-options">${Object.entries(speechRates).map(([rate, item]) => `
+        <label class="option-card"><input type="radio" name="speech-rate" value="${rate}" ${rate === state.speechRate ? 'checked' : ''} required><span>${item.label}</span></label>`).join('')}
+      </div></fieldset>
+      <div class="interest-field"><label for="interests">喜欢聊的话题（选填）</label><input id="interests" name="interests" placeholder="比如：种花、做饭、听戏" value="${escapeHtml(state.interests)}" maxlength="80"></div>
+      <button class="button wide" type="submit">保存助手设置</button>
+    </form>
+  </main>`;
 }
 
 function showContact() {
@@ -942,7 +994,11 @@ document.addEventListener('click', (event) => {
   const owner = elderRoutes.includes(route) ? 'elder' : 'family';
   switch (action) {
     case 'close': dialog.close(); break;
-    case 'persona': showPersona(); break;
+    case 'preview-persona': {
+      const form = button.form;
+      speak(personas[form.elements.persona.value].preview, form.elements['speech-rate'].value);
+      break;
+    }
     case 'care': showCare(); break;
     case 'contact': showContact(); break;
     case 'demo-care': {
@@ -1071,6 +1127,7 @@ document.addEventListener('submit', (event) => {
     case 'message': sendMessage(data.get('message')); break;
     case 'persona':
       state.persona = data.get('persona');
+      state.speechRate = data.get('speech-rate');
       state.interests = data.get('interests').trim();
       refresh('助手设置已保存。');
       break;
@@ -1112,6 +1169,10 @@ document.addEventListener('submit', (event) => {
 
 document.addEventListener('change', async (event) => {
   const field = event.target;
+  if (field.name === 'persona' && field.form?.dataset.form === 'persona') {
+    field.form.querySelector('.persona-preview').textContent = personas[field.value].preview;
+    return;
+  }
   if (field.id === 'capture-album' || field.id === 'capture-native') { await records.readFile(field); return; }
   if (field.id !== 'device-file' || !field.files.length) return;
   const editor = deviceEditor;
