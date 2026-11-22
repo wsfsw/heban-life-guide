@@ -17,6 +17,8 @@ const types = {
   'records.js': 'text/javascript; charset=utf-8',
   'guides.js': 'text/javascript; charset=utf-8',
   'logic.js': 'text/javascript; charset=utf-8',
+  'assistant-client.js': 'text/javascript; charset=utf-8',
+  'shortcuts.js': 'text/javascript; charset=utf-8',
 };
 const assets = Object.fromEntries(await Promise.all(Object.entries(types).map(async ([file, type]) => [`/${file}`, { type, body: await read(file) }])));
 for (const file of ['guide-kit.webp', 'voice-card.webp']) {

@@ -16,6 +16,67 @@ function client(env, id) {
   };
 }
 
+test('assistant sends text and inline images to DeepSeek and returns the allowed Pages origin', async (t) => {
+  const env = await localStorageBindings();
+  t.after(env.close);
+  const local = client(env);
+  assert.deepEqual(await (await local('/api/assistant')).json(), { online: false });
+  env.DEEPSEEK_API_KEY = 'fixture-key';
+  const pages = 'https://wsfsw.github.io';
+  const preflight = await local('/api/assistant', 'OPTIONS', undefined, pages);
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), pages);
+  assert.equal((await local('/api/assistant', 'POST', { text: '怎么用？' }, 'https://elsewhere.test')).status, 403);
+  assert.equal((await local('/api/assistant', 'POST', { photo: 'https://elsewhere.test/photo.jpg' })).status, 422);
+  const fixture = { observation: '看到了遥控器。', steps: ['找有雪花图案的模式。'], verify: '先看清模式字样。', choices: ['怎么开机'] };
+  const call = t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, 'https://api.deepseek.com/chat/completions');
+    assert.equal(options.headers.Authorization, 'Bearer fixture-key');
+    assert.equal(options.redirect, 'error');
+    const sent = JSON.parse(options.body);
+    assert.equal(sent.model, 'deepseek-flash');
+    const content = sent.messages.at(-1).content;
+    if (Array.isArray(content)) {
+      assert.equal(content[1].image_url.url, 'data:image/jpeg;base64,/9j/2Q==');
+      assert.ok(content[0].text.includes('想制冷'));
+      assert.equal(sent.response_format.type, 'json_object');
+    } else assert.equal(content, '怎么调大音量？');
+    return Response.json({ choices: [{ message: { content: Array.isArray(content) ? JSON.stringify(fixture) : '按音量加键。' } }] });
+  });
+  const text = await local('/api/assistant', 'POST', { text: '怎么调大音量？' });
+  assert.deepEqual(await text.json(), { answer: '按音量加键。' });
+  const image = await local('/api/assistant', 'POST', { photo: 'data:image/jpeg;base64,/9j/2Q==', text: '想制冷' }, pages);
+  assert.equal(image.headers.get('access-control-allow-origin'), pages);
+  assert.deepEqual(await image.json(), { analysis: fixture });
+  assert.equal(call.mock.callCount(), 2);
+});
+
+test('family shortcuts are added for connected accounts and revoked with the connection', async (t) => {
+  const env = await localStorageBindings();
+  t.after(env.close);
+  const elder = client(env, 'elder');
+  const family = client(env, 'child');
+  const stranger = client(env, 'stranger');
+  const path = '/api/family/shortcuts';
+  const feature = { kind: 'built-in', target: 'camera', recipient: 'elder' };
+  assert.equal((await family(path, 'POST', feature)).status, 403);
+  const { code } = await (await family('/api/family/invite', 'POST')).json();
+  assert.equal((await elder('/api/family/join', 'POST', { code })).status, 200);
+  assert.equal((await family(path, 'POST', { kind: 'website', target: 'javascript:alert(1)', title: '恶意入口', recipient: 'elder' })).status, 422);
+  const added = await family(path, 'POST', feature);
+  assert.equal(added.status, 201);
+  assert.equal((await family(path, 'POST', feature)).status, 409);
+  const { shortcuts } = await (await elder('/api/family')).json();
+  assert.equal(shortcuts[0].title, '拍照分析');
+  assert.equal(shortcuts[0].direction, 'received');
+  assert.deepEqual((await (await stranger('/api/family')).json()).shortcuts, []);
+  assert.equal((await elder(path + '/' + shortcuts[0].id, 'DELETE')).status, 200);
+  assert.equal((await (await elder('/api/family')).json()).shortcuts.length, 1);
+  await elder('/api/family/link/child', 'DELETE');
+  assert.deepEqual((await (await elder('/api/family')).json()).shortcuts, []);
+  assert.deepEqual((await (await family('/api/family')).json()).shortcuts, []);
+});
+
 test('login, account isolation, revision conflicts and cross-origin protection', async (t) => {
   const env = await localStorageBindings();
   t.after(env.close);

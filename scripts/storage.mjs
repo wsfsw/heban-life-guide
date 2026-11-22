@@ -6,7 +6,10 @@ export async function localStorageBindings(folder) {
   if (folder) await mkdir(folder, { recursive: true });
   const sql = new DatabaseSync(folder ? join(folder, 'heban.sqlite') : ':memory:');
   sql.exec('PRAGMA foreign_keys = ON;');
-  for (const [table, migration] of Object.entries({ profiles: '0000_initial', scene_records: '0001_scene_records', passkey_accounts: '0002_passkeys' })) {
+  for (const [table, migration] of Object.entries({
+    profiles: '0000_initial', scene_records: '0001_scene_records', passkey_accounts: '0002_passkeys',
+    assistant_requests: '0003_assistant_shortcuts',
+  })) {
     if (!sql.prepare("select 1 from sqlite_master where type='table' and name=?").get(table)) {
       sql.exec(await readFile(new URL(`../drizzle/${migration}.sql`, import.meta.url), 'utf8'));
     }
