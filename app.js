@@ -147,7 +147,7 @@ function homeHeader(owner) {
 }
 
 function pageHeader(title, owner, extra = '') {
-  const backLabel = { family: '家属端', devices: '家里设备', 'family-devices': '设备卡列表', guides: '生活操作指引', connections: '家庭连接', ask: '助手', chat: '聊天', mine: '我的', records: '我的记录', 'guide/parcel': '快递柜取件指引', 'guide/bill': '查电费指引' }[owner] ?? '长辈端';
+  const backLabel = { family: '家属端', devices: '家电怎么用', 'family-devices': '设备卡列表', guides: '「跟着做」', connections: '家庭连接', ask: '问问助手', chat: '聊天', mine: '我的', records: '我的记录', 'guide/parcel': '快递柜取件', 'guide/bill': '查电费账单' }[owner] ?? '首页';
   return `<header class="topbar subbar"><a class="icon-button" href="#/${owner}" aria-label="返回${backLabel}">${icon('back')}</a><h1 id="screen-title" tabindex="-1">${title}</h1>${extra}<span class="subbar-space" aria-hidden="true"></span></header>`;
 }
 
@@ -159,10 +159,10 @@ function tile({ link, action, title, subtitle, glyph, tone = 'sage', prominent =
 }
 
 const quickCards = [
-  { link: 'ask', title: '问问助手', subtitle: '打字或用语音问', glyph: 'chat', color: 'blue' },
-  { link: 'guide/parcel', title: '快递柜取件', subtitle: '找到取件入口', glyph: 'parcel', color: 'peach' },
-  { link: 'guide/bill', title: '查本期电费', subtitle: '看账单和缴费记录', glyph: 'bill', color: 'lilac' },
-  { link: 'devices', title: '家里设备', subtitle: '看图找按键', glyph: 'remote', color: 'mint' },
+  { link: 'ask', title: '问问助手', subtitle: '可以说话，也可以打字', glyph: 'chat', color: 'blue' },
+  { link: 'guide/parcel', title: '快递柜取件', subtitle: '找取件码，学着开柜门', glyph: 'parcel', color: 'peach' },
+  { link: 'guide/bill', title: '查电费账单', subtitle: '看看这期要交多少钱', glyph: 'bill', color: 'lilac' },
+  { link: 'devices', title: '家电怎么用', subtitle: '看图找按键', glyph: 'remote', color: 'mint' },
 ];
 
 function featureCard({ link, title, subtitle, glyph, color = 'blue', external = false }) {
@@ -190,8 +190,8 @@ function elderHome() {
   return `${homeHeader('elder')}<main class="surface home-screen">
     <div class="home-heading"><h1 id="screen-title" tabindex="-1">生活帮手</h1><p class="date">${longDate.format(new Date())}</p></div>
     <section class="feature-banner home-capture" aria-labelledby="capture-home-title">
-      <div class="banner-copy"><h2 id="capture-home-title">操作卡住了？</h2><p>拍张照片，请助手看看。</p>
-      <a class="button home-camera-button" href="#/capture/other/home">${icon('camera', 23)}拍照分析</a></div>
+      <div class="banner-copy"><h2 id="capture-home-title">不知道按哪个键？</h2><p>拍下按键或屏幕，看看下一步怎么做。</p>
+      <a class="button home-camera-button" href="#/capture/other/home">${icon('camera', 23)}拍照问一问</a></div>
       <img src="./assets/guide-kit.webp" width="520" height="434" alt="" fetchpriority="high">
     </section>
     <section class="tool-section" aria-labelledby="home-tools-title">
@@ -199,7 +199,7 @@ function elderHome() {
       <div class="feature-grid">${quickCards.map(featureCard).join('')}${addedFeatureCards()}</div>
     </section>
     <div class="app-list home-shortcuts">
-      ${tile({ link: 'reminders', title: '设置提醒', subtitle: next ? `${formatWhen(next.at)}　${next.title}` : '记下接下来要做的事', glyph: 'bell' })}
+      ${tile({ link: 'reminders', title: '设个提醒', subtitle: next ? `${formatWhen(next.at)}　${next.title}` : '记下买菜、出门的时间', glyph: 'bell' })}
     </div>
   </main>`;
 }
@@ -208,7 +208,7 @@ function bottomNav() {
   const tabs = [
     { link: 'elder', label: '首页', glyph: 'home', pages: ['elder'] },
     { link: 'ask', label: '助手', glyph: 'chat', pages: ['ask', 'chat', 'assistant-settings', 'capture'] },
-    { link: 'guides', label: '指引', glyph: 'bill', pages: ['guides', 'guide', 'devices', 'device'] },
+    { link: 'guides', label: '跟着做', glyph: 'bill', pages: ['guides', 'guide', 'devices', 'device'] },
     { link: 'mine', label: '我的', glyph: 'people' },
   ];
   const selected = tabs.find((tab) => tab.pages?.includes(route))?.link ?? 'mine';
@@ -224,9 +224,9 @@ function mineScreen() {
       ${account.guest ? loginAction('登录') : '<button class="button quiet" data-action="account-signout" type="button">退出登录</button>'}
     </div>
     <div class="app-list">
-      ${tile({ link: 'records', title: '我的记录', subtitle: '查看保存的现场照片', glyph: 'photo' })}
-      ${tile({ link: 'reminders', title: '我的提醒', subtitle: '查看和管理提醒', glyph: 'bell' })}
-      ${tile({ link: 'assistant-settings/mine', title: '助手设置', subtitle: '选择回复风格和语速', glyph: 'tune' })}
+      ${tile({ link: 'records', title: '我的记录', subtitle: '看看存下的照片', glyph: 'photo' })}
+      ${tile({ link: 'reminders', title: '我的提醒', subtitle: '看时间，也可以改时间', glyph: 'bell' })}
+      ${tile({ link: 'assistant-settings/mine', title: '助手设置', subtitle: '可以让助手读慢一点', glyph: 'tune' })}
       ${tile({ link: 'family', title: '家属端', subtitle: '联系家人、制作设备卡', glyph: 'heart' })}
     </div>
   </main>`;
@@ -336,7 +336,7 @@ async function removeShortcut(button) {
 
 const chatConfig = {
   chat: { title: '聊聊天', examples: ['今天想聊聊天', '附近有什么社区活动？', '明天下午三点提醒我浇花'], greeting: '您好，我是{name}。您可以和我说说今天过得怎么样，也可以让我帮您记一件要做的事。' },
-  ask: { title: '问问助手', examples: topics.slice(0, 3).map((topic) => topic.title), greeting: '您现在想做什么？可以从「怎么查电费」这样的问题问起。' },
+  ask: { title: '问问助手', examples: topics.slice(0, 3).map((topic) => topic.title), greeting: '遇到不会用的手机功能或家电，可以在这儿问。比如「怎么看电费账单？」' },
   'family-chat': { title: '跟助手聊聊', examples: ['怎么和爸妈打开话题？', '明天晚上八点提醒我给爸妈打电话'], greeting: '您好，我是{name}。您可以问我怎么和长辈聊聊，也可以设置一个联系提醒。' },
 };
 
@@ -349,21 +349,21 @@ function chatScreen(mode) {
   const toggle = `<button class="listen" data-action="listen" type="button" aria-pressed="${state.listen}">${icon('sound', 20)}听回复<span class="switch" aria-hidden="true"></span></button>`;
   const familyMode = mode === 'family-chat';
   return `${pageHeader(config.title, familyMode ? 'family' : 'elder', `<div class="toolbar chat-controls">${toggle}${familyMode ? '' : settings(mode)}</div>`)}<main class="surface conversation" data-mode="${mode}">
-    ${familyMode ? '' : `<nav class="assistant-tabs" aria-label="助手模式"><a href="#/ask" ${mode === 'ask' ? 'aria-current="page"' : ''}>生活问答</a><a href="#/chat" ${mode === 'chat' ? 'aria-current="page"' : ''}>聊聊天</a></nav>
+    ${familyMode ? '' : `<nav class="assistant-tabs" aria-label="助手功能"><a href="#/ask" ${mode === 'ask' ? 'aria-current="page"' : ''}>问怎么用</a><a href="#/chat" ${mode === 'chat' ? 'aria-current="page"' : ''}>聊聊天</a></nav>
       <div class="assistant-tools" aria-label="助手工具">
-        ${featureCard({ link: 'capture', title: '拍照分析', subtitle: '看看怎么操作', glyph: 'camera', color: 'blue' })}
-        ${featureCard({ link: 'records', title: '我的记录', subtitle: '看现场照片', glyph: 'photo', color: 'lilac' })}
+        ${featureCard({ link: 'capture', title: '拍照问一问', subtitle: '拍下按键或屏幕', glyph: 'camera', color: 'blue' })}
+        ${featureCard({ link: 'records', title: '我的记录', subtitle: '看存下的照片', glyph: 'photo', color: 'lilac' })}
       </div>`}
     <div class="message-list" role="log" aria-label="聊天记录">${messages.map(renderMessage).join('')}
       ${waiting ? '<p class="assistant-wait" role="status">禾伴正在回答…</p>' : ''}
       ${failure?.account === account ? `<div class="assistant-retry" role="status"><p>${escapeHtml(failure.error)}</p>
-        <button type="button" class="button quiet" data-action="assistant-retry">重试回答</button></div>` : ''}
+        <button type="button" class="button quiet" data-action="assistant-retry">再问一次</button></div>` : ''}
     </div>
     <div class="composer-area">
       <div class="examples" aria-label="常用说法">${config.examples.map((example) => `<button class="example" type="button" data-action="example" data-text="${escapeHtml(example)}" ${waiting ? 'disabled' : ''}>${escapeHtml(example)}</button>`).join('')}</div>
       <form class="composer" data-form="message"><button class="icon-button mic" type="button" data-action="voice" aria-label="用语音输入" ${waiting ? 'disabled' : ''}>${icon('mic', 25)}</button>
-      <input id="message-input" name="message" aria-label="想说的话" placeholder="说说您想问的事" maxlength="300" autocomplete="off" required ${waiting ? 'disabled' : ''}><button class="button" type="submit" ${waiting ? 'disabled' : ''}>发送</button></form>
-      <p class="chat-note">在线问答由 DeepSeek 提供，请避开账号和验证码。</p>
+      <input id="message-input" name="message" aria-label="想说的话" placeholder="${mode === 'ask' ? '在这里写下您的问题' : '在这里写下您想说的话'}" maxlength="300" autocomplete="off" required ${waiting ? 'disabled' : ''}><button class="button" type="submit" ${waiting ? 'disabled' : ''}>发送</button></form>
+      <p class="chat-note">请别发送账号、密码或验证码。在线回复由 DeepSeek 提供。</p>
     </div></main>`;
 }
 
@@ -394,7 +394,7 @@ function remindersScreen(owner) {
 }
 
 function devicesScreen() {
-  return `${pageHeader('家里设备怎么用', 'elder')}<main class="surface devices-screen">
+  return `${pageHeader('家电怎么用', 'elder')}<main class="surface devices-screen">
     ${state.deviceGuides.length ? `<section aria-labelledby="my-devices"><h2 id="my-devices">我家的设备</h2><div class="stack">${state.deviceGuides.map((guide) => tile({ link: `device/${guide.id}`, title: guide.name, subtitle: '看我家设备的照片', glyph: 'photo' })).join('')}</div></section>` : ''}
     <section aria-labelledby="practice-devices"><h2 id="practice-devices">先在手机上练一练</h2><div class="stack">${deviceLessons.map((lesson) => tile({ link: `device/${lesson.id}`, title: lesson.name, subtitle: lesson.summary, glyph: lesson.icon, tone: lesson.icon === 'washer' ? 'apricot' : 'sage' })).join('')}</div></section>
     <p class="device-help">练完可以对照实物找按键。按键不一样时，可以请家人给这台设备做一张照片指引。</p>
@@ -561,15 +561,15 @@ function saveDeviceGuide(form) {
 }
 
 function guidesScreen() {
-  return `${pageHeader('生活操作指引', 'elder')}<main class="surface guides-screen">
-    <div class="section-heading"><h2>选一件事，跟着做</h2></div>
+  return `${pageHeader('跟着做', 'elder')}<main class="surface guides-screen">
+    <div class="section-heading"><h2>您想学哪一件事？</h2></div>
     <div class="feature-grid">${lifeGuides.map((guide) => {
       const run = readGuideRun(guide, state.guideRuns[guide.id]);
       const inProgress = guide.steps[run.screen]?.title ?? (run.screen === 'help' ? '找人帮忙' : '');
       return featureCard({ link: `guide/${guide.id}`, title: guide.title, subtitle: inProgress ? `继续：${inProgress}` : guide.summary, glyph: guide.icon, color: guide.id === 'parcel' ? 'peach' : 'lilac' });
     }).join('')}
       ${featureCard(quickCards[3])}
-      ${featureCard({ link: 'capture', title: '拍照分析', subtitle: '拍下卡住的画面', glyph: 'camera', color: 'blue' })}
+      ${featureCard({ link: 'capture', title: '拍照问一问', subtitle: '拍下按键或屏幕', glyph: 'camera', color: 'blue' })}
     </div>
     <p class="device-help">这里是操作演示。实际画面以现场设备或官方服务为准。</p>
   </main>`;
@@ -599,7 +599,7 @@ function guideScreen() {
         const step = guide.steps[key];
         return `<button class="guide-choice" type="button" data-action="guide-start" data-step="${key}"><span><strong>${escapeHtml(step.title)}</strong><span>${escapeHtml(step.preview.labels.join(' · '))}</span></span>${icon('right', 21)}</button>`;
       }).join('')}<button class="button quiet wide" type="button" data-action="guide-help">都不一样，找人帮忙</button></div>
-      <a class="button quiet guide-capture" href="#/capture/${guide.id}">${icon('camera', 22)}拍下当前画面</a>
+      <a class="button quiet guide-capture" href="#/capture/${guide.id}">${icon('camera', 22)}拍照问一问</a>
       <p class="device-help guide-caption">示例里没有真实取件码、户号或交易。</p>
     </main>`;
   }
@@ -609,7 +609,7 @@ function guideScreen() {
     return `${header}<main class="surface guide-screen">
       <h2 id="guide-heading" tabindex="-1">${complete ? guide.success : '可以找人帮您看看'}</h2>
       ${complete
-        ? '<a class="button wide" href="#/guides">返回生活操作指引</a>'
+        ? '<a class="button wide" href="#/guides">返回「跟着做」</a>'
         : `${run.failed >= 2 ? '<p class="guide-notice">柜门试了两次仍未打开，可以请工作人员查看。</p>' : ''}
           <ol class="guide-help-list">${guide.help.map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ol>
           <button class="button quiet" type="button" data-action="read" data-text="${escapeHtml(guide.help.join(''))}">${icon('sound', 23)}听求助办法</button>`}
@@ -779,7 +779,7 @@ function cloudEntry(message = '', values = {}) {
   accountBar.hidden = true;
   const creating = formMode === 'create';
   app.innerHTML = `<header class="topbar"><span class="brand">${icon('home', 40)}禾伴</span></header>
-    <main class="surface cloud-entry entry-choice"><h1 id="screen-title" tabindex="-1">${formMode ? creating ? '创建禾伴账户' : '用邮箱登录' : '生活操作指引'}</h1>
+    <main class="surface cloud-entry entry-choice"><h1 id="screen-title" tabindex="-1">${formMode ? creating ? '创建禾伴账户' : '用邮箱登录' : '您的生活帮手'}</h1>
     ${formMode ? `<p>用手机或电脑的指纹、面容或锁屏密码确认身份。</p>
       <form class="sign-in-form" data-form="email-login">
         ${creating ? `<label for="login-name">怎么称呼您？</label><input id="login-name" name="name" autocomplete="nickname" maxlength="40" value="${escapeHtml(values.name ?? '')}" required>` : ''}
@@ -788,12 +788,12 @@ function cloudEntry(message = '', values = {}) {
         <button class="button" type="submit">${creating ? '确认设备并创建' : '确认设备并登录'}</button>
       </form>
       <button class="text-button" data-action="${creating ? 'login-existing' : 'login-create'}" type="button">${creating ? '已有禾伴账户？登录' : '第一次使用？创建账户'}</button>`
-      : `<p>取快递、查电费、拍下不会操作的画面。</p>
+      : `<p>学取快递、查电费。遇到不会按的键，拍张照片问一问。</p>
       ${message ? `<p class="form-error" role="alert">${escapeHtml(message)}</p>` : ''}
-      <button class="button" type="button" data-action="continue-guest">跳过登录</button>
+      <button class="button" type="button" data-action="continue-guest">不登录，直接用</button>
       <button class="button quiet" type="button" data-action="login-create">用邮箱继续</button>
       <p class="form-help">跳过后，提醒和照片保存在当前浏览器。</p>`}
-    ${formMode ? '<button class="text-button" data-action="continue-guest" type="button">跳过登录</button>' : ''}
+    ${formMode ? '<button class="text-button" data-action="continue-guest" type="button">不登录，直接用</button>' : ''}
     ${account ? '<button class="text-button" type="button" data-action="close-login">返回</button>' : ''}
     <details class="old-account"><summary>找回旧版记录</summary><a href="${legacySignIn}" target="_top">打开旧版账户</a></details>
     </main>`;
@@ -1031,7 +1031,7 @@ async function sendMessage(text, retry = false) {
     }
     catch (error) {
       failure = error.message;
-      reply = '可以先参考禾伴的内置指引。\n' + answerFor(input, mode, state);
+      reply = '可以先看看禾伴里的操作步骤。\n' + answerFor(input, mode, state);
     }
     finally { if (pendingReplies.get(mode) === active) pendingReplies.delete(mode); }
   }

@@ -70,7 +70,7 @@ test('family shortcuts are added for connected accounts and revoked with the con
   assert.equal(added.status, 201);
   assert.equal((await family(path, 'POST', feature)).status, 409);
   const { shortcuts } = await (await elder('/api/family')).json();
-  assert.equal(shortcuts[0].title, '拍照分析');
+  assert.equal(shortcuts[0].title, '拍照问一问');
   assert.equal(shortcuts[0].direction, 'received');
   assert.deepEqual((await (await stranger('/api/family')).json()).shortcuts, []);
   assert.equal((await elder(path + '/' + shortcuts[0].id, 'DELETE')).status, 200);
