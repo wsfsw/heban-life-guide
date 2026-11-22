@@ -106,7 +106,7 @@ async function assistantRoute(request, url, env) {
       { type: 'image_url', image_url: { url: photo } },
     ] : query;
     const result = await fetch(deepseekChat, {
-      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(22_000),
+      method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(22_000),
       headers: { Authorization: 'Bearer ' + env.DEEPSEEK_API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'deepseek-flash', thinking: { type: 'disabled' }, max_tokens: photo ? 780 : 500,

@@ -32,7 +32,7 @@ test('assistant sends text and inline images to DeepSeek and returns the allowed
   const call = t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(url, 'https://api.deepseek.com/chat/completions');
     assert.equal(options.headers.Authorization, 'Bearer fixture-key');
-    assert.equal(options.redirect, 'error');
+    assert.equal(options.redirect, 'manual');
     const sent = JSON.parse(options.body);
     assert.equal(sent.model, 'deepseek-flash');
     const content = sent.messages.at(-1).content;
