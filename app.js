@@ -1,6 +1,6 @@
 import {
   personas, speechRates, newState, localDate, localTime, formatWhen, inactiveDays,
-  reminderOrder, finishReminder, parseReminder, topics, answerFor, calendarFile,
+  reminderOrder, finishReminder, parseReminder, exampleQuestions, calendarFile,
 } from './logic.js';
 import { deviceLessons, readDevicePhoto } from './devices.js';
 import { lifeGuides, readGuideRun, setGuideScreen, previousGuideScreen } from './guides.js';
@@ -336,7 +336,7 @@ async function removeShortcut(button) {
 
 const chatConfig = {
   chat: { title: '聊聊天', examples: ['今天想聊聊天', '附近有什么社区活动？', '明天下午三点提醒我浇花'], greeting: '您好，我是{name}。您可以和我说说今天过得怎么样，也可以让我帮您记一件要做的事。' },
-  ask: { title: '问问助手', examples: topics.slice(0, 3).map((topic) => topic.title), greeting: '遇到不会用的手机功能或家电，可以在这儿问。比如「怎么看电费账单？」' },
+  ask: { title: '问问助手', examples: exampleQuestions, greeting: '遇到不会用的手机功能或家电，可以在这儿问。比如「怎么看电费账单？」' },
   'family-chat': { title: '跟助手聊聊', examples: ['怎么和爸妈打开话题？', '明天晚上八点提醒我给爸妈打电话'], greeting: '您好，我是{name}。您可以问我怎么和长辈聊聊，也可以设置一个联系提醒。' },
 };
 
@@ -344,7 +344,8 @@ function chatScreen(mode) {
   const config = chatConfig[mode];
   const waiting = pendingReplies.get(mode) === account;
   const failure = failedReplies.get(mode);
-  const greeting = config.greeting.replace('{name}', state.persona);
+  const interest = mode === 'chat' ? state.interests.split(/[、，,\s]+/).find(Boolean) : '';
+  const greeting = config.greeting.replace('{name}', state.persona) + (interest ? `也可以聊聊您喜欢的「${interest.slice(0, 24)}」。` : '');
   const messages = [{ role: 'assistant', text: greeting }, ...state.messages[mode]];
   const toggle = `<button class="listen" data-action="listen" type="button" aria-pressed="${state.listen}">${icon('sound', 20)}听回复<span class="switch" aria-hidden="true"></span></button>`;
   const familyMode = mode === 'family-chat';
@@ -357,7 +358,8 @@ function chatScreen(mode) {
     <div class="message-list" role="log" aria-label="聊天记录">${messages.map(renderMessage).join('')}
       ${waiting ? '<p class="assistant-wait" role="status">禾伴正在回答…</p>' : ''}
       ${failure?.account === account ? `<div class="assistant-retry" role="status"><p>${escapeHtml(failure.error)}</p>
-        <button type="button" class="button quiet" data-action="assistant-retry">再问一次</button></div>` : ''}
+        <button type="button" class="button quiet" data-action="assistant-retry">再问一次</button>
+        ${mode === 'ask' ? '<a class="section-link" href="#/guides">先看操作步骤</a>' : ''}</div>` : ''}
     </div>
     <div class="composer-area">
       <div class="examples" aria-label="常用说法">${config.examples.map((example) => `<button class="example" type="button" data-action="example" data-text="${escapeHtml(example)}" ${waiting ? 'disabled' : ''}>${escapeHtml(example)}</button>`).join('')}</div>
@@ -1007,19 +1009,19 @@ async function sendMessage(text, retry = false) {
   if (!messages || pendingReplies.get(mode) === active) return;
   if (retry) {
     const failed = failedReplies.get(mode);
-    if (failed?.account !== active || messages.at(-1)?.id !== failed.replyId || messages.at(-2)?.id !== failed.questionId) return;
-    messages.pop();
+    if (failed?.account !== active || messages.at(-1)?.id !== failed.questionId) return;
   } else {
     messages.push({ id: crypto.randomUUID(), role: 'user', text: input });
   }
   failedReplies.delete(mode);
   const questionId = messages.at(-1).id;
-  const history = messages.slice(-7, -1).map(({ role, text }) => ({ role, text }));
+  const history = messages.slice(0, -1).filter(({ role, text }) => role !== 'assistant'
+    || !text.startsWith('可以先参考禾伴的内置指引。\n')).slice(-6).map(({ role, text }) => ({ role, text }));
   const draft = /提醒|叫我|记得/.test(input) ? parseReminder(input) : null;
   const validDraft = draft?.title && draft.at > Date.now() ? draft : null;
   let reply;
   let failure;
-  if (validDraft) reply = `我听到的是：${formatWhen(validDraft.at)}，${validDraft.title}。请核对一下，再保存。`;
+  if (validDraft) reply = `提醒已经填好：${formatWhen(validDraft.at)}，${validDraft.title}。请核对一下，再保存。`;
   else {
     pendingReplies.set(mode, active);
     save();
@@ -1031,14 +1033,12 @@ async function sendMessage(text, retry = false) {
     }
     catch (error) {
       failure = error.message;
-      reply = '可以先看看禾伴里的操作步骤。\n' + answerFor(input, mode, state);
     }
     finally { if (pendingReplies.get(mode) === active) pendingReplies.delete(mode); }
   }
   if (account !== active) return;
-  const replyId = crypto.randomUUID();
-  messages.push({ id: replyId, role: 'assistant', text: reply, draft: validDraft });
-  if (failure) failedReplies.set(mode, { account: active, text: input, error: failure, questionId, replyId });
+  if (failure) failedReplies.set(mode, { account: active, text: input, error: failure, questionId });
+  else messages.push({ id: crypto.randomUUID(), role: 'assistant', text: reply, draft: validDraft });
   if (messages.length > 150) messages.splice(0, messages.length - 150);
   noteActivity();
   save();
@@ -1051,7 +1051,7 @@ async function sendMessage(text, retry = false) {
     document.querySelector('.message:last-child')?.scrollIntoView({ block: 'nearest' });
     document.querySelector('#message-input')?.focus({ preventScroll: true });
   }
-  if (state.listen) speak(reply);
+  if (state.listen) speak(failure || reply);
 }
 
 function startVoice(button) {

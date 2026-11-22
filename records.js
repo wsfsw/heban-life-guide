@@ -238,7 +238,7 @@ export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog,
   async function analyze(data, chosen) {
     const current = view;
     if (current?.mode !== 'review') return;
-    Object.assign(current, { mode: 'analyzing', scene: data.get('scene'), note: (chosen ?? data.get('note')).trim(), error: '' });
+    Object.assign(current, { mode: 'analyzing', scene: data.get('scene'), note: (chosen ?? data.get('note')).trim(), error: '', analysis: null });
     redraw(current);
     try {
       const { analysis } = await askAssistant({ text: current.note, photo: current.photo });
