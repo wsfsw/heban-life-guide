@@ -82,7 +82,7 @@ export function createRecords({ paint, pageHeader, escapeHtml, icon, showDialog,
         <button class="button quiet" type="button" data-action="capture-reset">取消</button>`;
     } else {
       body = `<section class="capture-ready" aria-label="选择照片来源">
-        <img src="/assets/guide-kit.webp" width="520" height="434" alt="">
+        <img src="./assets/guide-kit.webp" width="520" height="434" alt="">
         <div class="capture-actions">
           <button id="capture-open" class="button" type="button" data-action="capture-open">${icon('camera', 22)}打开相机</button>
           ${filePicker('capture-album', '从相册选择')}

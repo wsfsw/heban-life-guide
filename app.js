@@ -9,6 +9,7 @@ import { createRecords } from './records.js';
 import { signInWithDevice } from './sign-in.js';
 
 const app = document.querySelector('#app');
+const cloudSite = document.querySelector('meta[name="heban-cloud-site"]')?.content;
 const dialog = document.querySelector('#dialog');
 const status = document.querySelector('#status');
 const accountBar = document.querySelector('#account-bar');
@@ -72,13 +73,19 @@ function accessPreference(value) {
   } catch { /* Permission to use persistent storage is optional for guests. */ }
 }
 
+function loginAction(label = '用邮箱登录', classes = 'button') {
+  return cloudSite
+    ? `<a class="${classes}" href="${escapeHtml(cloudSite)}">打开云端版</a>`
+    : `<button class="${classes}" data-action="show-login" type="button">${label}</button>`;
+}
+
 function updateCloudStatus(current, detail = '') {
   cloudStatus = current;
   if (!account || authPanel) return;
   accountBar.dataset.state = current;
   const text = { saving: '正在保存', saved: account.guest ? account.temporary ? '本次访问有效' : '已保存到本机' : '已云端保存', error: '保存失败', conflict: '另一台设备有更新', auth: '登录已失效' };
   accountBar.hidden = false;
-  accountBar.innerHTML = `<div>${account.guest ? '<span>游客</span><button type="button" class="text-button" data-action="show-login">用邮箱登录</button>' : `<a href="#/connections">${escapeHtml(account.name)}</a>`}<span class="sync-label" role="status">${text[current]}</span></div>
+  accountBar.innerHTML = `<div>${account.guest ? `<span>游客</span>${loginAction('用邮箱登录', 'text-button')}` : `<a href="#/connections">${escapeHtml(account.name)}</a>`}<span class="sync-label" role="status">${text[current]}</span></div>
     ${current === 'error' ? '<button type="button" class="text-button" data-action="cloud-retry">重试保存</button>' : ''}
     ${current === 'conflict' ? '<button type="button" class="text-button" data-action="cloud-refresh">读取云端</button>' : ''}
     ${current === 'auth' ? '<button type="button" class="text-button" data-action="show-login">重新登录</button>' : ''}
@@ -167,7 +174,7 @@ function elderHome() {
     <section class="feature-banner home-capture" aria-labelledby="capture-home-title">
       <div class="banner-copy"><h2 id="capture-home-title">操作卡住了？</h2><p>拍下现场，稍后再看。</p>
       <a class="button home-camera-button" href="#/capture/other/home">${icon('camera', 23)}拍照取证</a></div>
-      <img src="/assets/guide-kit.webp" width="520" height="434" alt="" fetchpriority="high">
+      <img src="./assets/guide-kit.webp" width="520" height="434" alt="" fetchpriority="high">
     </section>
     <section class="tool-section" aria-labelledby="home-tools-title">
       <div class="section-heading"><h2 id="home-tools-title">常用功能</h2><a class="section-link" href="#/records">我的记录</a></div>
@@ -196,7 +203,7 @@ function mineScreen() {
   return `${pageHeader('我的', 'elder')}<main class="surface mine-screen">
     <div class="profile-card tone-blue"><span class="feature-icon">${icon('people', 28)}</span>
       <div><h2>${escapeHtml(account.name)}</h2><p>${account.guest ? account.temporary ? '本次浏览可用' : '记录保存在当前浏览器' : '记录保存到云端'}</p></div>
-      ${account.guest ? '<button class="button" data-action="show-login" type="button">登录</button>' : '<button class="button quiet" data-action="account-signout" type="button">退出登录</button>'}
+      ${account.guest ? loginAction('登录') : '<button class="button quiet" data-action="account-signout" type="button">退出登录</button>'}
     </div>
     <div class="app-list">
       ${tile({ link: 'records', title: '我的记录', subtitle: '查看保存的现场照片', glyph: 'photo' })}
@@ -545,8 +552,8 @@ function guideInteraction(action, button) {
 
 function connectionsScreen() {
   if (account.guest) return `${pageHeader('家庭连接', 'family')}<main class="surface connections">
-    <p class="empty-card">登录后可以连接家人，分享问题和设备卡。</p>
-    <button class="button" type="button" data-action="show-login">用邮箱登录</button>
+    <p class="empty-card">${cloudSite ? '请在云端版登录后连接家人，分享问题和设备卡。' : '登录后可以连接家人，分享问题和设备卡。'}</p>
+    ${loginAction()}
   </main>`;
   const links = family?.links ?? [];
   const items = family?.items ?? [];
@@ -600,7 +607,7 @@ function joinFamilyDialog() {
 
 async function openShareItem(kind, id) {
   if (account.guest) {
-    showDialog('登录后分享', '<p class="form-help">登录后可以把这条内容分享给已连接的家人。</p><button class="button wide" type="button" data-action="show-login">用邮箱登录</button>');
+    showDialog('登录后分享', `<p class="form-help">${cloudSite ? '可以在云端版与家人连接并分享问题或设备卡。' : '登录后可以把这条内容分享给已连接的家人。'}</p>${loginAction('用邮箱登录', 'button wide')}`);
     return;
   }
   const item = kind === 'device' ? state.deviceGuides.find((entry) => entry.id === id)
@@ -721,6 +728,10 @@ async function startCloud(mode) {
 async function boot() {
   let locked = false;
   try {
+    if (cloudSite) {
+      await startCloud('guest');
+      return;
+    }
     const choice = accessPreference();
     const old = location.hash === '#/legacy' || choice === 'legacy';
     const mode = old ? 'legacy' : choice === 'guest' ? 'guest' : (await api('/api/auth/session')).signedIn ? 'account' : '';
@@ -854,7 +865,7 @@ function assistantSettings() {
       <section class="feature-banner voice-banner">
         <div class="banner-copy"><p class="persona-preview" aria-live="polite">${personas[state.persona].preview}</p>
           <button class="button quiet" type="button" data-action="preview-persona">${icon('sound', 21)}试听</button></div>
-        <img src="/assets/voice-card.webp" alt="" width="480" height="480">
+        <img src="./assets/voice-card.webp" alt="" width="480" height="480">
       </section>
       <fieldset><legend>朗读语速</legend><div class="rate-options">${Object.entries(speechRates).map(([rate, item]) => `
         <label class="option-card"><input type="radio" name="speech-rate" value="${rate}" ${rate === state.speechRate ? 'checked' : ''} required><span>${item.label}</span></label>`).join('')}
@@ -1255,7 +1266,7 @@ window.addEventListener('hashchange', () => {
   recognition?.abort();
   window.speechSynthesis?.cancel();
   route = readRoute();
-  if (location.hash === '#/legacy' && !authBusy) { void boot(); return; }
+  if (!cloudSite && location.hash === '#/legacy' && !authBusy) { void boot(); return; }
   authPanel = false;
   enterScreen(true);
 });
@@ -1271,5 +1282,5 @@ window.addEventListener('beforeunload', (event) => {
   if (unsyncedCloud()) { event.preventDefault(); event.returnValue = ''; }
 });
 setInterval(() => { if (account) checkReminders(); }, 10_000);
-cloudEntry();
+if (!cloudSite) cloudEntry();
 void boot();

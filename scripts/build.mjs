@@ -1,8 +1,10 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 const output = new URL('../dist/server/', import.meta.url);
+const pagesOutput = new URL('../dist-pages/', import.meta.url);
 const root = new URL('../', import.meta.url);
 const read = (file) => readFile(new URL(file, root), 'utf8');
 const types = {
@@ -26,8 +28,28 @@ const browser = await build({
   platform: 'browser', format: 'esm', write: false, target: 'es2022',
 });
 assets['/sign-in.js'] = { type: types['app.js'], body: browser.outputFiles[0].text };
-const server = await read('api.js');
-const moduleText = server + '\nconst siteAssets = ' + JSON.stringify(assets) + ';\n' + `
+
+if (process.argv.includes('--pages')) await buildPages();
+else await buildSiteWorker();
+
+async function buildPages() {
+  const cloudSite = 'https://heban-life-guide.wsfsw2008.chatgpt.site/';
+  for (const [path, asset] of Object.entries(assets)) {
+    const file = new URL(path.slice(1), pagesOutput);
+    let contents = asset.encoded ? Buffer.from(asset.encoded, 'base64') : asset.body;
+    if (path === '/index.html') {
+      contents = contents.replace('<title>', `<meta name="heban-cloud-site" content="${cloudSite}">\n    <title>`);
+    }
+    await mkdir(dirname(fileURLToPath(file)), { recursive: true });
+    await writeFile(file, contents);
+  }
+  await writeFile(new URL('.nojekyll', pagesOutput), '');
+  console.log('GitHub Pages files built in dist-pages.');
+}
+
+async function buildSiteWorker() {
+  const server = await read('api.js');
+  const moduleText = server + '\nconst siteAssets = ' + JSON.stringify(assets) + ';\n' + `
 export default {
   async fetch(request, env) {
     const { pathname } = new URL(request.url);
@@ -47,10 +69,11 @@ export default {
   }
 };
 `;
-await mkdir(output, { recursive: true });
-await build({
-  stdin: { contents: moduleText, resolveDir: fileURLToPath(root), sourcefile: 'heban-worker.js' },
-  bundle: true, platform: 'browser', format: 'esm', target: 'es2022',
-  outfile: fileURLToPath(new URL('index.js', output)),
-});
-console.log('Sites Worker built.');
+  await mkdir(output, { recursive: true });
+  await build({
+    stdin: { contents: moduleText, resolveDir: fileURLToPath(root), sourcefile: 'heban-worker.js' },
+    bundle: true, platform: 'browser', format: 'esm', target: 'es2022',
+    outfile: fileURLToPath(new URL('index.js', output)),
+  });
+  console.log('Sites Worker built.');
+}

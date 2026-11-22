@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:pages": "node scripts/build.mjs --pages",
     "start": "node scripts/local.mjs",
     "check": "node --check app.js && node --check records.js && node --check cloud.js && node --check guest.js && node --check sign-in.js && node --check api.js && node --check scripts/build.mjs && node --check scripts/local.mjs",
     "test": "node --test tests/api.test.mjs"

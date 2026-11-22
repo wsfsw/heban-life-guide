@@ -9,6 +9,7 @@
 - `npm run check` 检查脚本语法。
 - `npm test` 验证身份、数据隔离、跨账户分享和撤回，以及现场照片的存取与删除。
 - `npm run build` 生成 Sites Worker。
+- `npm run build:pages` 生成可发布到 GitHub Pages 的 `dist-pages/`。将该目录的内容作为 Pages 发布源。体验版打开即进入游客模式，提醒和照片保存在当前浏览器。登录与家庭连接可从页面打开云端版。
 
 `api.js` 验证 WebAuthn 凭据，并使用仅 HTTP 可读的会话 Cookie。D1 保存账户、会话、邀请和分享，以及现场记录的备注与时间。R2 保存照片。更新时检查版本号，避免不同设备误覆盖。旧版记录仍可通过原来的 ChatGPT Sites 身份访问。
 
