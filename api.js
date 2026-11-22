@@ -31,9 +31,9 @@ function siteUser(request) {
   return { id, name: lines(name, 40) || '禾伴用户' };
 }
 
-async function readJson(request, max = 24_000) {
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!contentType.startsWith('application/json') || !request.body) fail(400, '请检查提交的内容。');
+async function readJson(request, max = 24_000, allowText = false) {
+  const contentType = (request.headers.get('content-type') ?? '').split(';', 1)[0].trim().toLowerCase();
+  if (!request.body || (contentType !== 'application/json' && !(allowText && contentType === 'text/plain'))) fail(400, '请检查提交的内容。');
   if (Number(request.headers.get('content-length')) > max) fail(413, '提交的内容过大。');
   const reader = request.body.getReader();
   const decoder = new TextDecoder();
@@ -71,7 +71,7 @@ const imagePrompt = '只输出一个 JSON 对象：observation 是看到了什�
 
 async function assistantRoute(request, url, env) {
   const origin = request.headers.get('Origin');
-  const cors = origin === pagesOrigin ? { 'Access-Control-Allow-Origin': pagesOrigin, Vary: 'Origin' } : {};
+  const cors = { Vary: 'Origin', ...(origin === pagesOrigin ? { 'Access-Control-Allow-Origin': pagesOrigin } : {}) };
   if (origin && origin !== url.origin && origin !== pagesOrigin) return json({ error: '请从禾伴页面操作。' }, 403);
   if (request.method === 'OPTIONS' && origin === pagesOrigin) {
     return new Response(null, { status: 204, headers: { ...cors, 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' } });
@@ -80,7 +80,7 @@ async function assistantRoute(request, url, env) {
     if (request.method === 'GET') return json({ online: Boolean(env.DEEPSEEK_API_KEY) }, 200, cors);
     if (request.method !== 'POST' || !origin) fail(403, '请从禾伴页面操作。');
     if (!env.DB || !env.DEEPSEEK_API_KEY) fail(503, '在线助手暂未连接。');
-    const { text: input, photo, history, style } = await readJson(request, 211_000) ?? {};
+    const { text: input, photo, history, style } = await readJson(request, 211_000, origin === pagesOrigin) ?? {};
     const query = lines(input, photo ? 140 : 300);
     if (photo) decodePicture(photo);
     if (!query && !photo) fail(422, '请说说您想做什么。');

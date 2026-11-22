@@ -7,11 +7,11 @@ const origin = 'https://heban.test';
 const statePath = '/api/state';
 
 function client(env, id) {
-  return async (route, method = 'GET', body, requestOrigin = origin) => {
+  return async (route, method = 'GET', body, requestOrigin = origin, contentType = 'application/json') => {
     const headers = new Headers();
     if (id) headers.set('oai-authenticated-user-id', id);
     if (method !== 'GET') headers.set('origin', requestOrigin);
-    if (body !== undefined) headers.set('content-type', 'application/json');
+    if (body !== undefined) headers.set('content-type', contentType);
     return handleApi(new Request(origin + route, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }), env);
   };
 }
@@ -45,7 +45,10 @@ test('assistant sends text and inline images to DeepSeek and returns the allowed
   });
   const text = await local('/api/assistant', 'POST', { text: '怎么调大音量？' });
   assert.deepEqual(await text.json(), { answer: '按音量加键。' });
-  const image = await local('/api/assistant', 'POST', { photo: 'data:image/jpeg;base64,/9j/2Q==', text: '想制冷' }, pages);
+  const imageInput = { photo: 'data:image/jpeg;base64,/9j/2Q==', text: '想制冷' };
+  assert.equal((await local('/api/assistant', 'POST', imageInput, 'https://elsewhere.test', 'text/plain')).status, 403);
+  assert.equal((await local('/api/assistant', 'POST', imageInput, origin, 'text/plain')).status, 400);
+  const image = await local('/api/assistant', 'POST', imageInput, pages, 'text/plain;charset=UTF-8');
   assert.equal(image.headers.get('access-control-allow-origin'), pages);
   assert.deepEqual(await image.json(), { analysis: fixture });
   assert.equal(call.mock.callCount(), 2);

@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
@@ -36,11 +37,18 @@ else await buildSiteWorker();
 
 async function buildPages() {
   const cloudSite = 'https://heban-life-guide.wsfsw2008.chatgpt.site/';
+  const { outputFiles: [bundle] } = await build({
+    entryPoints: [fileURLToPath(new URL('app.js', root))], bundle: true,
+    platform: 'browser', format: 'esm', write: false, target: 'es2021',
+  });
+  const version = createHash('sha256').update(bundle.contents).digest('hex').slice(0, 12);
   for (const [path, asset] of Object.entries(assets)) {
     const file = new URL(path.slice(1), pagesOutput);
     let contents = asset.encoded ? Buffer.from(asset.encoded, 'base64') : asset.body;
+    if (path === '/app.js') contents = bundle.contents;
     if (path === '/index.html') {
-      contents = contents.replace('<title>', `<meta name="heban-cloud-site" content="${cloudSite}">\n    <title>`);
+      contents = contents.replace('<title>', `<meta name="heban-cloud-site" content="${cloudSite}">\n    <title>`)
+        .replace('src="./app.js"', `src="./app.js?v=${version}"`);
     }
     await mkdir(dirname(fileURLToPath(file)), { recursive: true });
     await writeFile(file, contents);

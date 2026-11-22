@@ -19,6 +19,7 @@ const recordRoutes = ['capture', 'records', 'record'];
 const routes = ['elder', 'family', 'chat', 'ask', 'reminders', 'family-chat', 'family-reminders', 'family-shortcuts', 'devices', 'device', 'family-devices', 'device-editor', 'guides', 'guide', 'connections', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes];
 const familyPages = ['elder', 'family-shortcuts', 'connections', 'shared-device'];
 const pendingReplies = new Map();
+const failedReplies = new Map();
 const elderRoutes = ['elder', 'chat', 'ask', 'reminders', 'devices', 'device', 'guides', 'guide', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes];
 const voices = window.SpeechRecognition || window.webkitSpeechRecognition;
 const longDate = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
@@ -342,6 +343,7 @@ const chatConfig = {
 function chatScreen(mode) {
   const config = chatConfig[mode];
   const waiting = pendingReplies.get(mode) === account;
+  const failure = failedReplies.get(mode);
   const greeting = config.greeting.replace('{name}', state.persona);
   const messages = [{ role: 'assistant', text: greeting }, ...state.messages[mode]];
   const toggle = `<button class="listen" data-action="listen" type="button" aria-pressed="${state.listen}">${icon('sound', 20)}听回复<span class="switch" aria-hidden="true"></span></button>`;
@@ -352,7 +354,11 @@ function chatScreen(mode) {
         ${featureCard({ link: 'capture', title: '拍照分析', subtitle: '看看怎么操作', glyph: 'camera', color: 'blue' })}
         ${featureCard({ link: 'records', title: '我的记录', subtitle: '看现场照片', glyph: 'photo', color: 'lilac' })}
       </div>`}
-    <div class="message-list" role="log" aria-label="聊天记录">${messages.map(renderMessage).join('')}${waiting ? '<p class="assistant-wait" role="status">禾伴正在回答…</p>' : ''}</div>
+    <div class="message-list" role="log" aria-label="聊天记录">${messages.map(renderMessage).join('')}
+      ${waiting ? '<p class="assistant-wait" role="status">禾伴正在回答…</p>' : ''}
+      ${failure?.account === account ? `<div class="assistant-retry" role="status"><p>${escapeHtml(failure.error)}</p>
+        <button type="button" class="button quiet" data-action="assistant-retry">重试回答</button></div>` : ''}
+    </div>
     <div class="composer-area">
       <div class="examples" aria-label="常用说法">${config.examples.map((example) => `<button class="example" type="button" data-action="example" data-text="${escapeHtml(example)}" ${waiting ? 'disabled' : ''}>${escapeHtml(example)}</button>`).join('')}</div>
       <form class="composer" data-form="message"><button class="icon-button mic" type="button" data-action="voice" aria-label="用语音输入" ${waiting ? 'disabled' : ''}>${icon('mic', 25)}</button>
@@ -992,18 +998,27 @@ function setSentence(text, form) {
   form.elements.title.focus();
 }
 
-async function sendMessage(text) {
+async function sendMessage(text, retry = false) {
   const input = text.trim().slice(0, 300);
   if (!input) return;
   const mode = route;
   const active = account;
   const messages = state.messages[mode];
   if (!messages || pendingReplies.get(mode) === active) return;
-  const history = messages.slice(-6).map(({ role, text }) => ({ role, text }));
+  if (retry) {
+    const failed = failedReplies.get(mode);
+    if (failed?.account !== active || messages.at(-1)?.id !== failed.replyId || messages.at(-2)?.id !== failed.questionId) return;
+    messages.pop();
+  } else {
+    messages.push({ id: crypto.randomUUID(), role: 'user', text: input });
+  }
+  failedReplies.delete(mode);
+  const questionId = messages.at(-1).id;
+  const history = messages.slice(-7, -1).map(({ role, text }) => ({ role, text }));
   const draft = /提醒|叫我|记得/.test(input) ? parseReminder(input) : null;
   const validDraft = draft?.title && draft.at > Date.now() ? draft : null;
-  messages.push({ id: crypto.randomUUID(), role: 'user', text: input });
   let reply;
+  let failure;
   if (validDraft) reply = `我听到的是：${formatWhen(validDraft.at)}，${validDraft.title}。请核对一下，再保存。`;
   else {
     pendingReplies.set(mode, active);
@@ -1014,18 +1029,28 @@ async function sendMessage(text) {
       reply = (await askAssistant({ text: input, history, style: state.persona })).answer;
       if (!reply) throw new Error('没有收到回复。');
     }
-    catch { reply = '在线助手暂时无法回答。' + answerFor(input, mode, state); }
+    catch (error) {
+      failure = error.message;
+      reply = '可以先参考禾伴的内置指引。\n' + answerFor(input, mode, state);
+    }
     finally { if (pendingReplies.get(mode) === active) pendingReplies.delete(mode); }
   }
   if (account !== active) return;
-  messages.push({ id: crypto.randomUUID(), role: 'assistant', text: reply, draft: validDraft });
+  const replyId = crypto.randomUUID();
+  messages.push({ id: replyId, role: 'assistant', text: reply, draft: validDraft });
+  if (failure) failedReplies.set(mode, { account: active, text: input, error: failure, questionId, replyId });
   if (messages.length > 150) messages.splice(0, messages.length - 150);
   noteActivity();
   save();
   if (route !== mode || authPanel) return;
   render();
-  document.querySelector('.message:last-child')?.scrollIntoView({ block: 'nearest' });
-  document.querySelector('#message-input')?.focus({ preventScroll: true });
+  if (failure) {
+    document.querySelector('.assistant-retry')?.scrollIntoView({ block: 'nearest' });
+    document.querySelector('[data-action=assistant-retry]')?.focus({ preventScroll: true });
+  } else {
+    document.querySelector('.message:last-child')?.scrollIntoView({ block: 'nearest' });
+    document.querySelector('#message-input')?.focus({ preventScroll: true });
+  }
   if (state.listen) speak(reply);
 }
 
@@ -1214,6 +1239,11 @@ document.addEventListener('click', (event) => {
     }
     case 'voice': startVoice(button); break;
     case 'example': sendMessage(text); break;
+    case 'assistant-retry': {
+      const failed = failedReplies.get(route);
+      if (failed) void sendMessage(failed.text, true);
+      break;
+    }
     case 'new-reminder': draftReminder(owner, null, owner === 'family' ? { title: `给${state.contactName}打电话` } : null); break;
     case 'reminder-example': draftReminder(owner, null, parseReminder(text)); break;
     case 'draft': {
