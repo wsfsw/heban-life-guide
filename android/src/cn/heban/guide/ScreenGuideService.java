@@ -6,6 +6,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.content.res.AssetFileDescriptor;
@@ -58,6 +59,8 @@ public final class ScreenGuideService extends AccessibilityService {
     private long tappedAt;
     private boolean finished;
     private GuidePlan plan;
+    private GuideSessionStore sessions;
+    private boolean observingFont;
     private StepEvidence evidence = new StepEvidence();
     private String sessionRef = "";
     private String resultRef = "";
@@ -91,15 +94,22 @@ public final class ScreenGuideService extends AccessibilityService {
         windows = getSystemService(WindowManager.class);
         keyguard = getSystemService(KeyguardManager.class);
         notifications = getSystemService(NotificationManager.class);
+        sessions = new GuideSessionStore(getSharedPreferences("active_guide", MODE_PRIVATE));
         notifications.createNotificationChannel(new NotificationChannel(CHANNEL, "禾伴屏幕引导", NotificationManager.IMPORTANCE_LOW));
-        getContentResolver().registerContentObserver(Settings.System.getUriFor(Settings.System.FONT_SCALE), false, fontObserver);
-        speech = new TextToSpeech(this, status -> {
-            if (status != TextToSpeech.SUCCESS || speech == null || speech.getVoices() == null) return;
-            Voice mandarin = speech.getVoices().stream().filter(voice -> ("zh".equals(voice.getLocale().getLanguage())
-                    || "cmn".equals(voice.getLocale().getLanguage())) && !voice.isNetworkConnectionRequired()).findFirst().orElse(null);
-            if (mandarin != null) speechReady = speech.setVoice(mandarin) == TextToSpeech.SUCCESS;
-            if (speechReady && caption != null) announce(caption.getText().toString());
-        });
+        if (!observingFont) {
+            getContentResolver().registerContentObserver(Settings.System.getUriFor(Settings.System.FONT_SCALE), false, fontObserver);
+            observingFont = true;
+        }
+        if (speech == null) {
+            speech = new TextToSpeech(this, status -> {
+                if (status != TextToSpeech.SUCCESS || speech == null || speech.getVoices() == null) return;
+                Voice mandarin = speech.getVoices().stream().filter(voice -> ("zh".equals(voice.getLocale().getLanguage())
+                        || "cmn".equals(voice.getLocale().getLanguage())) && !voice.isNetworkConnectionRequired()).findFirst().orElse(null);
+                if (mandarin != null) speechReady = speech.setVoice(mandarin) == TextToSpeech.SUCCESS;
+                if (speechReady && caption != null) announce(caption.getText().toString());
+            });
+        }
+        if (!isRunning()) restoreSession();
     }
 
     void begin(String packageName, GuidePlan instructions, String ref) {
@@ -117,6 +127,40 @@ public final class ScreenGuideService extends AccessibilityService {
         initialConfigFont = getResources().getConfiguration().fontScale;
         initialFont = Settings.System.getFloat(getContentResolver(), Settings.System.FONT_SCALE, Float.NaN);
         started = SystemClock.elapsedRealtime();
+        saveSession();
+        publishNotification();
+        inspectSoon();
+    }
+
+    private int bootCount() {
+        try { return Settings.Global.getInt(getContentResolver(), Settings.Global.BOOT_COUNT, -1); }
+        catch (SecurityException unavailable) { return -1; }
+    }
+
+    private void saveSession() {
+        if (sessions == null || !isRunning()) return;
+        sessions.save(new GuideSessionStore.Session(settingsPackage, plan == null ? "" : plan.encode(), sessionRef, stepIndex,
+                initialFont, initialConfigFont), bootCount(), SystemClock.elapsedRealtime(), System.currentTimeMillis());
+    }
+
+    private void restoreSession() {
+        GuideSessionStore.Session saved = sessions.read(bootCount(), SystemClock.elapsedRealtime(), System.currentTimeMillis());
+        if (saved == null) return;
+        GuidePlan restored = saved.plan.isEmpty() ? null : GuidePlan.restore(saved.plan);
+        if (!saved.plan.isEmpty() && (restored == null || saved.step >= restored.steps.size())) {
+            sessions.clear();
+            return;
+        }
+        settingsPackage = saved.settingsPackage;
+        plan = restored;
+        sessionRef = saved.reference;
+        resultRef = sessionRef;
+        resultStatus = "running";
+        stepIndex = saved.step;
+        initialFont = saved.initialFont;
+        initialConfigFont = saved.initialConfigFont;
+        started = SystemClock.elapsedRealtime();
+        prompt = plan == null ? OPEN_SETTINGS : plan.steps.get(stepIndex).text;
         publishNotification();
         inspectSoon();
     }
@@ -157,6 +201,7 @@ public final class ScreenGuideService extends AccessibilityService {
         stepIndex++;
         if (stepIndex >= plan.steps.size()) { finish("这次引导已完成"); return; }
         setPrompt(plan.steps.get(stepIndex).text);
+        saveSession();
         inspectSoon();
     }
 
@@ -398,6 +443,7 @@ public final class ScreenGuideService extends AccessibilityService {
 
     private void finish(String message) {
         finished = true;
+        if (sessions != null) sessions.clear();
         resultRef = sessionRef;
         resultStatus = "completed";
         if (!resultRef.isEmpty()) getSharedPreferences("guide_result", MODE_PRIVATE).edit().putString("ref", resultRef).apply();
@@ -586,7 +632,6 @@ public final class ScreenGuideService extends AccessibilityService {
 
     private void announce(String text) {
         if (text.equals(lastUttered)) return;
-        lastUttered = text;
         stopAudio();
         if (plan == null) {
             String file;
@@ -604,11 +649,14 @@ public final class ScreenGuideService extends AccessibilityService {
                 case "请点显示大小和文字": file = "display"; break;
                 default: file = "";
             }
-            if (!file.isEmpty() && playRecording(file)) return;
+            if (!file.isEmpty() && playRecording(file)) {
+                lastUttered = text;
+                return;
+            }
         }
         if (speechReady && speech != null) {
             speech.setSpeechRate(0.84f);
-            speech.speak(text, TextToSpeech.QUEUE_FLUSH, null, text);
+            if (speech.speak(text, TextToSpeech.QUEUE_FLUSH, null, text) == TextToSpeech.SUCCESS) lastUttered = text;
         }
     }
 
@@ -668,6 +716,11 @@ public final class ScreenGuideService extends AccessibilityService {
 
     void end() {
         if (isRunning()) { resultRef = sessionRef; resultStatus = "ended"; }
+        if (sessions != null) sessions.clear();
+        releaseRuntime();
+    }
+
+    private void releaseRuntime() {
         settingsPackage = null;
         plan = null;
         sessionRef = "";
@@ -686,13 +739,43 @@ public final class ScreenGuideService extends AccessibilityService {
         if (notifications != null) notifications.cancel(NOTIFICATION);
     }
 
-    @Override public void onInterrupt() { end(); }
+    @Override public void onInterrupt() { stopAudio(); }
+
+    @Override public void onTaskRemoved(Intent rootIntent) {
+        saveSession();
+        super.onTaskRemoved(rootIntent);
+    }
+
+    @Override public boolean onUnbind(Intent intent) {
+        if (isStillEnabled()) {
+            saveSession();
+            releaseRuntime();
+        } else end();
+        return super.onUnbind(intent);
+    }
+
+    private boolean isStillEnabled() {
+        try {
+            String enabled = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            if (enabled == null) return Settings.Secure.getInt(getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 0) == 1;
+            ComponentName own = new ComponentName(this, ScreenGuideService.class);
+            TextUtils.SimpleStringSplitter list = new TextUtils.SimpleStringSplitter(':');
+            list.setString(enabled);
+            for (String name : list) if (own.equals(ComponentName.unflattenFromString(name))) return true;
+            return false;
+        } catch (SecurityException unavailable) {
+            return true;
+        }
+    }
 
     @Override public void onDestroy() {
         if (connected == this) connected = null;
-        end();
-        getContentResolver().unregisterContentObserver(fontObserver);
-        if (speech != null) speech.shutdown();
+        releaseRuntime();
+        if (observingFont) getContentResolver().unregisterContentObserver(fontObserver);
+        if (speech != null) {
+            speech.shutdown();
+            speech = null;
+        }
         super.onDestroy();
     }
 

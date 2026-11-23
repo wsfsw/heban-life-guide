@@ -44,8 +44,30 @@ final class GuidePlan {
         this.steps = Collections.unmodifiableList(steps);
     }
 
+    String encode() {
+        try {
+            JSONArray instructions = new JSONArray();
+            for (Step step : steps) {
+                instructions.put(new JSONObject().put("text", step.text).put("target", step.target)
+                        .put("app", step.app).put("after", step.after));
+            }
+            return new JSONObject().put("title", title).put("app", app).put("steps", instructions).toString();
+        } catch (JSONException invalid) {
+            throw new IllegalStateException("Could not save the validated guide", invalid);
+        }
+    }
+
     static GuidePlan parse(String payload) {
-        if (payload == null || payload.length() > 2200) return null;
+        return parse(payload, 2200);
+    }
+
+    static GuidePlan restore(String payload) {
+        // The saved form includes defaults and normalized optional fields.
+        return parse(payload, 4096);
+    }
+
+    private static GuidePlan parse(String payload, int maxLength) {
+        if (payload == null || payload.length() > maxLength) return null;
         try {
             JSONObject input = new JSONObject(payload);
             JSONArray steps = input.optJSONArray("steps");
