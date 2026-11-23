@@ -90,6 +90,11 @@ test('phone guidance is an optional assistant reply action with platform-specifi
     steps: [{ text: '打开微信。', target: '微信' }, { text: '点「相册」。', target: '相册' }],
   });
   assert.equal(androidGuidePath({ topic: 'font' }), 'font');
+  const inferred = androidGuidePath({ androidApp: 'wechat', steps: [
+    '打开微信，点底部“通讯录”', '不要点“删除”，点“返回”', '点“我”，再点“设置”',
+  ] });
+  const inferredSteps = JSON.parse(new URL('heban-guide://phone/' + inferred).searchParams.get('plan')).steps;
+  assert.deepEqual(inferredSteps.map(({ target }) => target), ['通讯录', '', '']);
   assert.equal(phoneTopic('怎么放大手机字体？'), 'font');
   assert.equal(phoneTopic('怎么连家里的 Wi-Fi？'), 'wifi');
   assert.equal(phoneTopic('怎么关闭 Wi-Fi？'), '');
