@@ -103,6 +103,27 @@ test('phone guidance is an optional assistant reply action with platform-specifi
   assert.ok(captionLines(instruction).every((line) => Array.from(line).length <= 13));
 });
 
+test('asking retries an empty structured response as plain text within one request', async (t) => {
+  const env = await localStorageBindings();
+  t.after(env.close);
+  env.DEEPSEEK_API_KEY = 'fixture-key';
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    const request = JSON.parse(options.body);
+    requests.push(request);
+    const content = request.response_format ? '   ' : '打开微信，找到您要联系的人。';
+    return Response.json({ choices: [{ message: { content }, finish_reason: 'stop' }] });
+  });
+  const question = '微信怎么发消息？';
+  const response = await client(env)('/api/assistant', 'POST', { text: question, suggestPhoneGuide: true });
+  assert.deepEqual(await response.json(), { answer: '打开微信，找到您要联系的人。', offerPhoneGuide: false });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].response_format.type, 'json_object');
+  assert.equal(requests[1].response_format, undefined);
+  assert.equal(requests[1].messages.at(-1).content, question);
+  assert.equal((await env.DB.prepare('SELECT count(*) as total FROM assistant_requests').bind().first()).total, 1);
+});
+
 test('assistant distinguishes a shared network limit from the site-wide limit', async (t) => {
   const env = await localStorageBindings();
   t.after(env.close);

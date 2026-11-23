@@ -73,6 +73,43 @@ const phonePrompt = '现在用大字字幕和普通话语音教长辈操作手�
 const androidScope = (value) => typeof value === 'string' && (['settings', 'wechat', 'qq', 'maps', 'browser'].includes(value)
   || /^[a-zA-Z][\w]*(\.[a-zA-Z][\w]*){1,6}$/.test(value) && value.length <= 100) ? value : '';
 
+async function requestDeepseek(env, messages, { structured, maxTokens, timeout }) {
+  const result = await fetch(deepseekChat, {
+    method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(timeout),
+    headers: { Authorization: 'Bearer ' + env.DEEPSEEK_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'deepseek-flash', thinking: { type: 'disabled' }, max_tokens: maxTokens, messages,
+      ...(structured ? { response_format: { type: 'json_object' } } : {}),
+    }),
+  }).catch((error) => {
+    const detail = lines(error.message, 240).replace(/sk-[a-zA-Z0-9_-]+/g, '[secret]');
+    console.warn('DeepSeek connection failed', error.name, detail);
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') fail(504, '助手回答等得太久了。请再试一次。');
+    fail(502, '助手后台暂时连不上回答服务。请稍后再试。');
+  });
+  if (!result.ok) {
+    console.warn('DeepSeek response status', result.status);
+    if ([401, 403].includes(result.status)) fail(503, '助手服务暂时不可用。请稍后再试。');
+    if (result.status === 402) fail(503, '在线助手的服务额度已用完。');
+    if (result.status === 429) fail(429, '在线助手现在有点忙，请稍后再试。');
+    fail(502, '在线助手暂时无法回复，请稍后再试。');
+  }
+  const completion = await result.json().catch(() => null);
+  return lines(completion?.choices?.[0]?.message?.content, 4500);
+}
+
+function readSuggestedReply(answer) {
+  if (!answer) return null;
+  try {
+    const reply = JSON.parse(answer);
+    const text = lines(reply?.answer, 1000);
+    return text ? { answer: text, offerPhoneGuide: reply.offerPhoneGuide === true } : null;
+  } catch {
+    // A provider may return usable plain text even when a JSON format was requested.
+    return answer.startsWith('{') || answer.startsWith('```') ? null : { answer: lines(answer, 1000), offerPhoneGuide: false };
+  }
+}
+
 export async function assistantRoute(request, url, env) {
   const origin = request.headers.get('Origin');
   const cors = { Vary: 'Origin', ...(origin === pagesOrigin ? { 'Access-Control-Allow-Origin': pagesOrigin } : {}) };
@@ -114,41 +151,27 @@ export async function assistantRoute(request, url, env) {
       ? phonePrompt + (phonePlatform === 'iphone' ? '这台是苹果手机（iPhone）。'
         : '这台是安卓手机，品牌和系统版本可能不同。androidApp 是主要应用，可用 settings（系统设置）、wechat、qq、maps、browser、确定的安卓包名或空字符串。步骤进入别的应用时，用 apps 与 steps 对齐列出对应应用，其余留空。targets 与 steps 等长，每项写这一步明确要点的一个按钮的原文。无法确定按钮、需要输入、付款或发送时用空字符串；按钮名字请原样写进步骤。')
       : '回复风格：' + (Object.hasOwn(tone, style) ? tone[style] : '温和') + '。';
-    const system = assistantPrompt + format + (suggest ? '。只输出 JSON 对象，answer 是普通中文回复，offerPhoneGuide 是布尔值。想在手机上操作设置或 App（例如调字体、用微信发图）时设为 true。设备操作、生活闲聊、知识解释设为 false。' : '');
+    const system = assistantPrompt + format + (suggest ? '。只输出 JSON 对象。范例：{"answer":"您好，请问您想办什么事？","offerPhoneGuide":false}。想在手机上操作设置或 App（例如调字体、用微信发图）时设为 true。设备操作、生活闲聊、知识解释设为 false。' : '');
     const content = photo ? [
       { type: 'text', text: query ? '想做什么：' + query : '请看看画面，告诉我可以接着问什么。' },
       { type: 'image_url', image_url: { url: photo } },
     ] : query;
-    const result = await fetch(deepseekChat, {
-      method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(22_000),
-      headers: { Authorization: 'Bearer ' + env.DEEPSEEK_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'deepseek-flash', thinking: { type: 'disabled' }, max_tokens: photo ? 780 : 500,
-        messages: [{ role: 'system', content: system }, ...previous, { role: 'user', content }],
-        ...(photo || phoneMode || suggest ? { response_format: { type: 'json_object' } } : {}),
-      }),
-    }).catch((error) => {
-      const detail = lines(error.message, 240).replace(/sk-[a-zA-Z0-9_-]+/g, '[secret]');
-      console.warn('DeepSeek connection failed', error.name, detail);
-      if (error.name === 'TimeoutError' || error.name === 'AbortError') fail(504, '助手回答等得太久了。请再试一次。');
-      fail(502, '助手后台暂时连不上回答服务。请稍后再试。');
-    });
-    if (!result.ok) {
-      console.warn('DeepSeek response status', result.status);
-      if ([401, 403].includes(result.status)) fail(503, '助手服务暂时不可用。请稍后再试。');
-      if (result.status === 402) fail(503, '在线助手的服务额度已用完。');
-      if (result.status === 429) fail(429, '在线助手现在有点忙，请稍后再试。');
-      fail(502, '在线助手暂时无法回复，请稍后再试。');
-    }
-    const completion = await result.json().catch(() => null);
-    const answer = lines(completion?.choices?.[0]?.message?.content, 4500);
-    if (!answer) fail(502, '助手这次没有返回结果，请稍后再试。');
+    const inputs = [...previous, { role: 'user', content }];
+    const deadline = Date.now() + 27_000;
+    const answer = await requestDeepseek(env, [{ role: 'system', content: system }, ...inputs],
+      { structured: photo || phoneMode || suggest, maxTokens: photo ? 780 : 500, timeout: 22_000 });
     if (suggest) {
-      let reply;
-      try { reply = JSON.parse(answer); } catch { /* Older compatible providers sometimes return plain text. */ }
-      return json({ answer: lines(reply?.answer, 1000) || lines(answer, 1000),
-        offerPhoneGuide: reply?.offerPhoneGuide === true }, 200, cors);
+      const reply = readSuggestedReply(answer);
+      if (reply) return json(reply, 200, cors);
+      const remaining = deadline - Date.now();
+      if (remaining > 0) {
+        const plain = await requestDeepseek(env, [{ role: 'system', content: assistantPrompt + format }, ...inputs],
+          { structured: false, maxTokens: 500, timeout: remaining });
+        if (plain) return json({ answer: lines(plain, 1000), offerPhoneGuide: false }, 200, cors);
+      }
+      fail(502, '助手这次没有返回结果，请稍后再试。');
     }
+    if (!answer) fail(502, '助手这次没有返回结果，请稍后再试。');
     if (!photo && !phoneMode) return json({ answer: lines(answer, 1000) }, 200, cors);
     const parsed = JSON.parse(answer);
     if (phoneMode) {

@@ -455,11 +455,10 @@ function chatScreen(mode) {
         ${featureCard({ link: 'capture', title: '拍照问一问', subtitle: '拍下按键或屏幕', glyph: 'camera', color: 'blue' })}
         ${featureCard({ link: 'records', title: '我的记录', subtitle: '看存下的照片', glyph: 'photo', color: 'lilac' })}
       </div>`}
-    <div class="message-list" role="log" aria-label="聊天记录">${messages.map(renderMessage).join('')}
+    <div class="message-list" role="log" aria-label="聊天记录">${renderChatMessages(messages, mode)}
       ${waiting ? '<p class="assistant-wait" role="status">禾伴正在回答…</p>' : ''}
       ${failure?.account === account ? `<div class="assistant-retry"><p role="alert">${escapeHtml(failure.error.message)}</p>
         <button type="button" class="button quiet" data-action="assistant-retry">再问一次</button>
-        ${mode === 'ask' && phoneTopic(failure.text) ? phoneGuideButton(failure.questionId) : ''}
         ${direct ? `<a class="button quiet" href="${escapeHtml(direct)}" target="_blank" rel="noopener">直接打开助手</a>` : ''}
         ${mode === 'ask' ? '<a class="section-link" href="#/guides">先看操作步骤</a>' : ''}</div>` : ''}
     </div>
@@ -472,18 +471,31 @@ function chatScreen(mode) {
 }
 
 function phoneGuideButton(questionId) {
+  const question = state.messages.ask.find((item) => item.role === 'user' && item.id === questionId);
+  if (!question) return '';
   const guide = phoneGuide.controls(questionId);
   if (guide) return guide;
-  const question = state.messages.ask.find((item) => item.role === 'user' && item.id === questionId)?.text;
-  return `${question ? phoneGuide.directLink(question) : ''}<button class="button quiet phone-offer" type="button" data-action="open-phone-guide" data-id="${escapeHtml(questionId)}">${icon('sound', 20)}听着一步一步做</button>`;
+  return `${phoneGuide.directLink(question.text)}<button class="button quiet phone-offer" type="button" data-action="open-phone-guide" data-id="${escapeHtml(questionId)}">${icon('sound', 20)}听着一步一步做</button>`;
 }
 
-function renderMessage(message) {
+function renderChatMessages(messages, mode) {
+  let question;
+  return messages.map((message, index) => {
+    if (message.role === 'user') {
+      question = message;
+      const unanswered = messages[index + 1]?.role !== 'assistant';
+      return renderMessage(message, mode === 'ask' && unanswered && phoneTopic(message.text) ? message.id : '');
+    }
+    const guideId = mode === 'ask' ? message.guideFor || (question && phoneTopic(question.text) ? question.id : '') : '';
+    question = null;
+    return renderMessage(message, guideId);
+  }).join('');
+}
+
+function renderMessage(message, guideId = '') {
   const tools = [];
   if (message.role === 'assistant') tools.push(`<button class="message-action" type="button" data-action="read" data-text="${escapeHtml(message.text)}" aria-label="朗读这条回复">${icon('sound', 17)}朗读</button>`);
-  if (route === 'ask' && message.guideFor && state.messages.ask.some((item) => item.role === 'user' && item.id === message.guideFor)) {
-    tools.push(phoneGuideButton(message.guideFor));
-  }
+  if (guideId) tools.push(phoneGuideButton(guideId));
   if (route === 'ask' && message.role === 'user') {
     tools.push(`<button class="message-action" type="button" data-action="share" data-id="${message.id}">分享给家人</button>`);
   }
@@ -1214,10 +1226,16 @@ async function sendMessage(text, retry = false) {
   const draft = /提醒|叫我|记得/.test(input) ? parseReminder(input) : null;
   const validDraft = draft?.title && draft.at > Date.now() ? draft : null;
   let reply;
-  let offerPhoneGuide = false;
+  const localTopic = mode === 'ask' ? phoneTopic(input) : '';
+  let offerPhoneGuide = Boolean(localTopic);
   let failure;
   if (validDraft) reply = `提醒已经填好：${formatWhen(validDraft.at)}，${validDraft.title}。请核对一下，再保存。`;
-  else {
+  else if (/^(您好|你好|哈喽|嗨|hello|hi)[！!。？?，,.\s]*$/i.test(input)) {
+    reply = '您好！您想办什么事？可以说出来，也可以在下方打字。';
+  } else if (localTopic) {
+    reply = localTopic === 'font' ? '我带您把手机的字调大。点下面的「听着一步一步做」，就可以开始。'
+      : '我带您连上无线网。点下面的「听着一步一步做」，就可以开始。';
+  } else {
     pendingReplies.set(mode, active);
     save();
     render();
@@ -1225,7 +1243,7 @@ async function sendMessage(text, retry = false) {
     try {
       const result = await askAssistant({ text: input, history, style: state.persona, ...(mode === 'ask' ? { suggestPhoneGuide: true } : {}) });
       reply = result.answer;
-      offerPhoneGuide = mode === 'ask' && (result.offerPhoneGuide === true || Boolean(phoneTopic(input)));
+      offerPhoneGuide = mode === 'ask' && result.offerPhoneGuide === true;
       if (!reply) throw new Error('没有收到回复。');
     }
     catch (error) {
