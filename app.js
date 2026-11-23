@@ -1,6 +1,6 @@
 import {
   personas, speechRates, newState, localDate, localTime, formatWhen, inactiveDays,
-  reminderOrder, finishReminder, parseReminder, exampleQuestions, calendarFile,
+  reminderOrder, finishReminder, parseReminder, exampleQuestions, calendarFile, familyPermission,
 } from './logic.js';
 import { deviceLessons, readDevicePhoto } from './devices.js';
 import { lifeGuides, readGuideRun, setGuideScreen, previousGuideScreen } from './guides.js';
@@ -8,7 +8,7 @@ import { api, photoUrl, connectCloud, saveCloud, flushCloud, unsyncedCloud } fro
 import { createRecords } from './records.js';
 import { signInWithDevice } from './sign-in.js';
 import { askAssistant, directAssistantUrl } from './assistant-client.js';
-import { cleanShortcut, shortcutOptions } from './shortcuts.js';
+import { cleanShortcut, defaultShortcuts, shortcutOptions } from './shortcuts.js';
 
 const app = document.querySelector('#app');
 const cloudSite = document.querySelector('meta[name="heban-cloud-site"]')?.content;
@@ -16,11 +16,11 @@ const dialog = document.querySelector('#dialog');
 const status = document.querySelector('#status');
 const accountBar = document.querySelector('#account-bar');
 const recordRoutes = ['capture', 'records', 'record'];
-const routes = ['elder', 'family', 'chat', 'ask', 'reminders', 'family-chat', 'family-reminders', 'family-shortcuts', 'devices', 'device', 'family-devices', 'device-editor', 'guides', 'guide', 'connections', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes];
-const familyPages = ['elder', 'family-shortcuts', 'connections', 'shared-device'];
+const routes = ['elder', 'family', 'chat', 'ask', 'reminders', 'family-chat', 'family-reminders', 'family-shortcuts', 'home-shortcuts', 'family-overview', 'devices', 'device', 'family-devices', 'device-editor', 'guides', 'guide', 'connections', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes];
+const familyPages = ['elder', 'home-shortcuts', 'family-shortcuts', 'family-overview', 'connections', 'shared-device'];
 const pendingReplies = new Map();
 const failedReplies = new Map();
-const elderRoutes = ['elder', 'chat', 'ask', 'reminders', 'devices', 'device', 'guides', 'guide', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes];
+const elderRoutes = ['elder', 'home-shortcuts', 'chat', 'ask', 'reminders', 'devices', 'device', 'guides', 'guide', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes];
 const voices = window.SpeechRecognition || window.webkitSpeechRecognition;
 const longDate = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
 const repeats = { never: '只提醒一次', daily: '每天提醒', weekly: '每周提醒' };
@@ -57,12 +57,14 @@ let returnFocus = null;
 let statusTimer;
 let demoLastSeen = null;
 let recognition;
+let speechQueue;
 let deviceStep = 0;
 let deviceEditor = null;
 let account = null;
 let family = null;
 let familyError = '';
 let familyBusy = false;
+let overview = null;
 let cloudStatus = 'saving';
 let invite = null;
 let authMode = '';
@@ -78,9 +80,9 @@ function accessPreference(value) {
   } catch { /* Permission to use persistent storage is optional for guests. */ }
 }
 
-function loginAction(label = '用邮箱登录', classes = 'button') {
+function loginAction(label = '用邮箱登录', classes = 'button', destination = '') {
   return cloudSite
-    ? `<a class="${classes}" href="${escapeHtml(cloudSite)}">打开云端版</a>`
+    ? `<a class="${classes}" href="${escapeHtml(destination ? new URL(`#/${destination}`, cloudSite).href : cloudSite)}">打开云端版</a>`
     : `<button class="${classes}" data-action="show-login" type="button">${label}</button>`;
 }
 
@@ -116,25 +118,64 @@ function notify(message) {
 }
 
 function noteActivity() {
-  if (account && state.monitoring && elderRoutes.includes(route) && document.visibilityState === 'visible') {
+  if (account && (state.monitoring || state.familyVisibility.some((item) => item.activity))
+    && elderRoutes.includes(route) && document.visibilityState === 'visible') {
     state.lastSeen = Date.now();
     save();
   }
 }
 
-function speak(text, rate = state.speechRate) {
-  if (!('speechSynthesis' in window)) {
-    notify('这台浏览器暂不支持朗读。');
+function stopSpeech() {
+  clearTimeout(speechQueue?.startTimer);
+  speechQueue = null;
+  const engine = window.speechSynthesis;
+  if (engine?.speaking || engine?.pending) engine.cancel();
+}
+
+function speak(text, rate = state.speechRate, manual = true) {
+  if (!text?.trim()) return;
+  const engine = window.speechSynthesis;
+  const Utterance = window.SpeechSynthesisUtterance;
+  if (!engine || !Utterance) {
+    notify('当前浏览器不提供朗读。请用手机自带的浏览器打开禾伴。');
     return;
   }
-  const speech = new SpeechSynthesisUtterance(text);
-  speech.lang = 'zh-CN';
-  speech.rate = speechRates[rate]?.value ?? speechRates.normal.value;
-  speech.onerror = (event) => {
-    if (event.error !== 'interrupted' && event.error !== 'canceled') notify('暂时无法朗读，请检查设备的语音设置。');
-  };
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(speech);
+  stopSpeech();
+  const chunks = text.trim().match(/[^。！？\n]{1,100}[。！？\n]*|[。！？\n]+/gu);
+  const zhVoices = (engine.getVoices?.() ?? []).filter((voice) => /^(zh|cmn)(?:[-_]|$)/i.test(voice.lang));
+  const mandarin = zhVoices.filter((voice) => !/[-_](hk|mo|yue)(?:[-_]|$)/i.test(voice.lang));
+  const voice = mandarin.find((item) => item.localService && /(?:[-_]cn|hans)/i.test(item.lang))
+    ?? mandarin.find((item) => item.localService) ?? mandarin[0] ?? zhVoices[0];
+  const queue = { utterance: null, startTimer: null };
+  speechQueue = queue;
+  function failure(error) {
+    if (speechQueue !== queue) return;
+    stopSpeech();
+    if (error === 'canceled' || error === 'interrupted') return;
+    notify(!manual ? '自动朗读未启动。请点回复下方的「朗读」。'
+      : error === 'voice-unavailable' || error === 'language-unavailable' ? '这台手机缺少中文语音。请在手机系统里添加中文语音。'
+      : '没有开始朗读。请检查媒体音量，或用手机自带的浏览器打开禾伴。');
+  }
+  function next() {
+    if (speechQueue !== queue) return;
+    clearTimeout(queue.startTimer);
+    const part = chunks.shift();
+    if (!part) { speechQueue = null; return; }
+    const item = new Utterance(part);
+    item.lang = voice?.lang ?? 'zh-CN';
+    if (voice) item.voice = voice;
+    item.rate = speechRates[rate]?.value ?? speechRates.normal.value;
+    item.onstart = () => clearTimeout(queue.startTimer);
+    item.onend = next;
+    item.onerror = (event) => failure(event.error);
+    queue.utterance = item;
+    queue.startTimer = setTimeout(() => failure('timeout'), 4500);
+    try {
+      if (engine.paused) engine.resume();
+      engine.speak(item);
+    } catch { failure('exception'); }
+  }
+  next();
 }
 
 const settings = (back = 'ask') => `<a class="icon-button" href="#/assistant-settings/${back}" aria-label="助手设置">${icon('tune', 23)}</a>`;
@@ -159,10 +200,10 @@ function tile({ link, action, title, subtitle, glyph, tone = 'sage', prominent =
 }
 
 const quickCards = [
-  { link: 'ask', title: '问问助手', subtitle: '可以说话，也可以打字', glyph: 'chat', color: 'blue' },
-  { link: 'guide/parcel', title: '快递柜取件', subtitle: '找取件码，学着开柜门', glyph: 'parcel', color: 'peach' },
-  { link: 'guide/bill', title: '查电费账单', subtitle: '看看这期要交多少钱', glyph: 'bill', color: 'lilac' },
-  { link: 'devices', title: '家电怎么用', subtitle: '看图找按键', glyph: 'remote', color: 'mint' },
+  { key: 'ask', ...shortcutOptions.ask, subtitle: '可以说话，也可以打字', color: 'blue' },
+  { key: 'parcel', ...shortcutOptions.parcel, subtitle: '找取件码，学着开柜门', color: 'peach' },
+  { key: 'bill', ...shortcutOptions.bill, subtitle: '看看这期要交多少钱', color: 'lilac' },
+  { key: 'devices', ...shortcutOptions.devices, subtitle: '看图找按键', color: 'mint' },
 ];
 
 function featureCard({ link, title, subtitle, glyph, color = 'blue', external = false }) {
@@ -172,21 +213,43 @@ function featureCard({ link, title, subtitle, glyph, color = 'blue', external = 
   </a>`;
 }
 
-function addedFeatureCards() {
+function addedHomeShortcuts() {
   const items = [...state.shortcuts, ...(family?.shortcuts?.filter((item) => item.direction === 'received') ?? [])];
   const seen = new Set();
-  return items.map((item) => {
+  return items.flatMap((item) => {
     const entry = cleanShortcut(item);
-    if (!entry || seen.has(entry.kind + entry.target)) return '';
+    if (!entry || seen.has(entry.kind + entry.target)) return [];
     seen.add(entry.kind + entry.target);
     const description = item.name ? `${item.name}添加` : '家属端添加';
-    if (entry.kind === 'built-in') return featureCard({ ...shortcutOptions[entry.target], title: entry.title, subtitle: description, color: 'lilac' });
-    return featureCard({ link: entry.target, title: entry.title, subtitle: new URL(entry.target).hostname, glyph: 'question', color: 'mint', external: true });
-  }).join('');
+    const info = { id: item.id, place: item.direction === 'received' ? 'remote' : 'local', title: entry.title };
+    if (entry.kind === 'built-in') return [{ ...shortcutOptions[entry.target], ...info, key: entry.target, subtitle: description, color: 'lilac' }];
+    return [{ ...info, link: entry.target, subtitle: new URL(entry.target).hostname, glyph: 'question', color: 'mint', external: true }];
+  });
+}
+
+function visibleDefaults(added) {
+  return defaultShortcuts.filter((key) => !state.hiddenShortcuts.includes(key) && !added.some((item) => item.key === key));
+}
+
+function homeShortcutsScreen() {
+  const added = addedHomeShortcuts();
+  const defaults = visibleDefaults(added).map((key) => ({ ...shortcutOptions[key], key, place: 'default' }));
+  const rows = [...defaults, ...added];
+  const hidden = state.hiddenShortcuts.filter((key) => !added.some((item) => item.key === key));
+  return `${pageHeader('管理常用功能', 'elder')}<main class="surface shortcut-screen">
+    <p class="device-help">删除后，该入口会从首页移除。原来的提醒、照片和使用记录仍可查看。</p>
+    <section class="shortcut-items"><h2>首页上的功能</h2>
+      ${rows.length ? `<ul class="record-list">${rows.map((item) => `<li class="shortcut-row"><div><strong>${escapeHtml(item.title)}</strong>${item.subtitle ? `<span>${escapeHtml(item.subtitle)}</span>` : ''}</div>
+        <button class="button quiet" type="button" data-action="remove-shortcut" data-id="${escapeHtml(item.id ?? '')}" data-place="${item.place}" data-key="${escapeHtml(item.key ?? '')}" aria-label="删除${escapeHtml(item.title)}入口">删除</button></li>`).join('')}</ul>` : '<p class="empty-card">首页暂时没有常用入口。</p>'}</section>
+    ${hidden.length ? `<section class="shortcut-items"><h2>可恢复的默认入口</h2><ul class="record-list">${hidden.map((key) => `<li class="shortcut-row"><strong>${escapeHtml(shortcutOptions[key].title)}</strong><button class="button quiet" type="button" data-action="restore-shortcut" data-key="${key}">恢复</button></li>`).join('')}</ul></section>` : ''}
+  </main>`;
 }
 
 function elderHome() {
   const next = reminderOrder(state.reminders, 'elder').find((item) => !item.done && item.at > Date.now());
+  const added = addedHomeShortcuts();
+  const defaults = visibleDefaults(added);
+  const featured = [...quickCards.filter((item) => defaults.includes(item.key)), ...added];
   return `${homeHeader('elder')}<main class="surface home-screen">
     <div class="home-heading"><h1 id="screen-title" tabindex="-1">生活帮手</h1><p class="date">${longDate.format(new Date())}</p></div>
     <section class="feature-banner home-capture" aria-labelledby="capture-home-title">
@@ -195,18 +258,18 @@ function elderHome() {
       <img src="./assets/guide-kit.webp" width="520" height="434" alt="" fetchpriority="high">
     </section>
     <section class="tool-section" aria-labelledby="home-tools-title">
-      <div class="section-heading"><h2 id="home-tools-title">常用功能</h2><a class="section-link" href="#/records">我的记录</a></div>
-      <div class="feature-grid">${quickCards.map(featureCard).join('')}${addedFeatureCards()}</div>
+      <div class="section-heading"><h2 id="home-tools-title">常用功能</h2><div class="section-actions"><a class="section-link" href="#/records">我的记录</a><a class="section-link" href="#/home-shortcuts">管理</a></div></div>
+      ${featured.length ? `<div class="feature-grid">${featured.map(featureCard).join('')}</div>` : defaults.includes('reminders') ? '' : '<p class="empty-card">还没有常用入口。</p>'}
     </section>
-    <div class="app-list home-shortcuts">
+    ${defaults.includes('reminders') ? `<div class="app-list home-shortcuts">
       ${tile({ link: 'reminders', title: '设个提醒', subtitle: next ? `${formatWhen(next.at)}　${next.title}` : '记下买菜、出门的时间', glyph: 'bell' })}
-    </div>
+    </div>` : ''}
   </main>`;
 }
 
 function bottomNav() {
   const tabs = [
-    { link: 'elder', label: '首页', glyph: 'home', pages: ['elder'] },
+    { link: 'elder', label: '首页', glyph: 'home', pages: ['elder', 'home-shortcuts'] },
     { link: 'ask', label: '助手', glyph: 'chat', pages: ['ask', 'chat', 'assistant-settings', 'capture'] },
     { link: 'guides', label: '跟着做', glyph: 'bill', pages: ['guides', 'guide', 'devices', 'device'] },
     { link: 'mine', label: '我的', glyph: 'people' },
@@ -227,6 +290,7 @@ function mineScreen() {
       ${tile({ link: 'records', title: '我的记录', subtitle: '看看存下的照片', glyph: 'photo' })}
       ${tile({ link: 'reminders', title: '我的提醒', subtitle: '看时间，也可以改时间', glyph: 'bell' })}
       ${tile({ link: 'assistant-settings/mine', title: '助手设置', subtitle: '可以让助手读慢一点', glyph: 'tune' })}
+      ${tile({ link: 'connections', title: '和家人分享', subtitle: '选择家人能看到的内容', glyph: 'people' })}
       ${tile({ link: 'family', title: '家属端', subtitle: '联系家人、制作设备卡', glyph: 'heart' })}
     </div>
   </main>`;
@@ -243,10 +307,11 @@ function familyHome() {
   const phoneAction = state.phone ? `<a class="button small" href="tel:${escapeHtml(state.phone)}">${icon('phone', 19)}去拨打</a>` : '<button class="button small" data-action="contact" type="button">设置号码</button>';
   return `${homeHeader('family')}<main class="surface family-screen"><h1 id="screen-title" tabindex="-1">家人关怀</h1>
     <button class="care-card ${overdue ? 'care-warn' : ''}" type="button" data-action="care"><span class="care-icon">${icon('heart', 42)}</span>
-      <span><strong>${demoLastSeen ? '关怀状态 · 演示' : '关怀状态'}</strong><span>${activity}</span></span>${icon('right', 22)}</button>
+      <span><strong>${demoLastSeen ? '本机提醒演示' : '本机关怀设置'}</strong><span>${activity}</span></span>${icon('right', 22)}</button>
     <div class="contact-card"><span class="tile-icon apricot">${icon('phone', 30)}</span><span class="tile-text"><strong>给${escapeHtml(state.contactName)}打电话</strong><span>${callReminder ? `${formatWhen(callReminder.at)} 有联系提醒` : '选个时间，打个电话'}</span></span>${phoneAction}</div>
     <div class="feature-grid family-tools">
       ${featureCard({ link: 'connections', title: '家庭连接', subtitle: '连接家人和查看分享', glyph: 'people', color: 'blue' })}
+      ${featureCard({ link: 'family-overview', title: '长辈聊天和近况', subtitle: '查看长辈同意分享的内容', glyph: 'heart', color: 'peach' })}
       ${featureCard({ link: 'family-reminders', title: '联系提醒', subtitle: '记下打电话的时间', glyph: 'calendar', color: 'peach' })}
       ${featureCard({ link: 'family-devices', title: '制作设备卡', subtitle: '在照片上标出按键', glyph: 'photo', color: 'mint' })}
       ${featureCard({ link: 'family-chat', title: '跟助手聊聊', subtitle: '聊聊怎么关心家人', glyph: 'chat', color: 'lilac' })}
@@ -261,21 +326,27 @@ function familyShortcutsScreen() {
   if (!account.guest && !family && !familyError) return `${head}<main class="surface"><p class="empty-card" role="status">正在读取家人和功能…</p></main>`;
   const links = family?.links ?? [];
   const items = [...state.shortcuts, ...(family?.shortcuts?.filter((item) => item.direction === 'sent') ?? [])];
+  const catalog = Object.entries(shortcutOptions);
+  const options = (group) => catalog.filter(([, item]) => item.group === group).map(([key, item]) => `<option value="${key}">${item.title}</option>`).join('');
   return `${head}<main class="surface shortcut-screen">
     <form class="shortcut-form" data-form="family-shortcut">
       <h2>添加一个功能</h2>
       <label for="shortcut-recipient">加给谁？</label>
-      <select id="shortcut-recipient" name="recipient"><option value="local">${account.guest ? '这个浏览器的长辈端' : '当前账号的长辈端'}</option>
-        ${links.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('')}</select>
-      ${!links.length ? `<p class="form-help">想同步到家人的手机？先完成家庭连接。 <a class="section-link" href="#/connections">去连接</a></p>` : ''}
-      <label for="shortcut-kind">选一个入口</label>
-      <select id="shortcut-kind" name="kind">
-        ${Object.entries(shortcutOptions).map(([name, item]) => `<option value="${name}">${item.title}</option>`).join('')}
+      <select id="shortcut-recipient" name="recipient" required>${links.length > 1 ? '<option value="">请选择一位家人</option>' : ''}
+        ${links.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}的首页</option>`).join('')}
+        <option value="local">${account.guest ? '这个浏览器的长辈首页' : '自己的长辈首页'}</option></select>
+      ${!links.length ? `<p class="form-help">想添加到家人手机的首页？先完成家庭连接。 ${account.guest ? loginAction('用邮箱登录', 'section-link', 'family-shortcuts') : '<a class="section-link" href="#/connections">去连接家人</a>'}</p>` : ''}
+      <label for="shortcut-kind">要添加什么？</label>
+      <select id="shortcut-kind" name="kind" required>
+        <option value="">请选择一个功能</option>
+        <optgroup label="生活步骤">${options('生活步骤')}</optgroup>
+        <optgroup label="家电步骤">${options('家电步骤')}</optgroup>
+        <optgroup label="其他功能">${options(undefined)}</optgroup>
         <option value="website">自定义网页</option>
       </select>
+      <label for="shortcut-title">在首页显示的名字</label><input id="shortcut-title" name="title" maxlength="24" placeholder="选填，留空就用功能名称">
       <div class="shortcut-custom" data-shortcut-custom hidden>
-        <label for="shortcut-title">显示名称</label><input id="shortcut-title" name="title" maxlength="24" placeholder="例如：社区助餐">
-        <label for="shortcut-url">网页地址</label><input id="shortcut-url" name="target" type="url" inputmode="url" maxlength="500" placeholder="https://">
+        <label for="shortcut-url">网页地址</label><input id="shortcut-url" name="target" type="url" inputmode="url" maxlength="500" placeholder="https://" disabled>
       </div>
       <p class="form-error" role="alert">${escapeHtml(familyError)}</p>
       <button class="button" type="submit">${icon('plus', 21)}添加到长辈端</button>
@@ -291,10 +362,11 @@ async function submitShortcut(form, data) {
   const kind = data.get('kind');
   const shortcut = cleanShortcut(kind === 'website'
     ? { kind, title: data.get('title'), target: data.get('target') }
-    : { kind: 'built-in', target: kind });
+    : { kind: 'built-in', target: kind, title: data.get('title') });
   const error = form.querySelector('.form-error');
-  if (!shortcut) { error.textContent = '请填写名称和以 https:// 开头的网页地址。'; return; }
+  if (!shortcut) { error.textContent = kind === 'website' ? '请填写名称和以 https:// 开头的网页地址。' : '请选择要添加的功能。'; return; }
   const recipient = data.get('recipient');
+  if (!recipient) { error.textContent = '请选择加到谁的首页。'; return; }
   if (recipient === 'local') {
     if (state.shortcuts.some((item) => item.kind === shortcut.kind && item.target === shortcut.target)) { error.textContent = '这个入口已经添加过。'; return; }
     if (state.shortcuts.length >= 12) { error.textContent = '最多可添加 12 个入口，请先移除一项。'; return; }
@@ -316,9 +388,19 @@ async function submitShortcut(form, data) {
 }
 
 async function removeShortcut(button) {
-  const { id, place } = button.dataset;
+  const { id, place, key } = button.dataset;
+  const hideDefault = route === 'home-shortcuts' && defaultShortcuts.includes(key);
+  function updateHiddenDefaults() {
+    if (hideDefault && !state.hiddenShortcuts.includes(key)) state.hiddenShortcuts.push(key);
+  }
+  if (place === 'default') {
+    updateHiddenDefaults();
+    refresh('已从首页删除。');
+    return;
+  }
   if (place === 'local') {
     state.shortcuts = state.shortcuts.filter((item) => item.id !== id);
+    updateHiddenDefaults();
     refresh('功能入口已移除。');
     return;
   }
@@ -328,7 +410,8 @@ async function removeShortcut(button) {
     const result = await api(`/api/family/shortcuts/${encodeURIComponent(id)}`, 'DELETE');
     if (account !== active) return;
     family = result;
-    if (route === 'family-shortcuts') render();
+    if (hideDefault) { updateHiddenDefaults(); save(); }
+    if (['family-shortcuts', 'home-shortcuts', 'elder'].includes(route)) render();
     notify('功能入口已移除。');
   } catch (error) { notify(error.message); }
   finally { button.disabled = false; }
@@ -660,12 +743,12 @@ function guideInteraction(action, button) {
 function connectionsScreen() {
   if (account.guest) return `${pageHeader('家庭连接', 'family')}<main class="surface connections">
     <p class="empty-card">${cloudSite ? '请在云端版登录后连接家人，分享问题和设备卡。' : '登录后可以连接家人，分享问题和设备卡。'}</p>
-    ${loginAction()}
+    ${loginAction('用邮箱登录', 'button', 'connections')}
   </main>`;
   const links = family?.links ?? [];
   const items = family?.items ?? [];
   return `${pageHeader('家庭连接', 'family')}<main class="surface connections-screen">
-    <p class="device-help">用邀请码连接不同账户。每条内容都由您选择是否分享。</p>
+    <p class="device-help">用邀请码连接不同账户。连接后，在「分享设置」选择对方能看到的内容。</p>
     <div class="connection-actions">
       <button class="button" type="button" data-action="invite-family">生成邀请码</button>
       <button class="button quiet" type="button" data-action="join-family">输入家人的邀请码</button>
@@ -673,7 +756,9 @@ function connectionsScreen() {
     ${invite ? `<div class="connection-code"><label for="invite-code">邀请码 · 24 小时有效</label><input id="invite-code" readonly value="${escapeHtml(invite)}"><button class="button quiet" type="button" data-action="copy-invite">复制邀请码</button></div>` : ''}
     ${familyError ? `<p role="alert" class="form-error">${escapeHtml(familyError)}</p><button class="button quiet" type="button" data-action="reload-family">重新读取</button>` : ''}
     <section><h2>已连接的家人</h2>
-      ${links.length ? `<div class="shared-list">${links.map((person) => `<div class="connection-row"><strong>${escapeHtml(person.name)}</strong><button type="button" class="text-button" data-action="remove-family" data-id="${person.id}">解除连接</button></div>`).join('')}</div>` : `<p class="empty-card">${familyBusy ? '正在读取…' : '还没有连接家人。'}</p>`}
+      ${links.length ? `<div class="shared-list">${links.map((person) => `<div class="connection-row family-person"><strong>${escapeHtml(person.name)}</strong><div class="section-actions">
+        <button type="button" class="text-button" data-action="family-permission" data-id="${escapeHtml(person.id)}" aria-label="${escapeHtml(person.name)}的分享设置">分享设置</button>
+        <button type="button" class="text-button" data-action="remove-family" data-id="${escapeHtml(person.id)}">解除连接</button></div></div>`).join('')}</div>` : `<p class="empty-card">${familyBusy ? '正在读取…' : '还没有连接家人。'}</p>`}
     </section>
     <section><h2>家庭分享</h2>
       ${items.length ? `<div class="shared-list">${items.map((item) => `<article class="connection-row connection-share"><div><strong>${escapeHtml(item.payload.title)}</strong><span>${item.direction === 'sent' ? '发给' : '来自'} ${escapeHtml(item.name)} · ${formatWhen(item.at)}</span></div>
@@ -685,14 +770,88 @@ function connectionsScreen() {
   </main>`;
 }
 
+function familyOverviewScreen() {
+  const title = pageHeader('长辈聊天和近况', 'family');
+  if (account.guest) return `${title}<main class="surface connections-screen"><p class="empty-card">登录并连接长辈后，可以查看对方同意分享的内容。</p>${loginAction('用邮箱登录', 'button', 'family-overview')}</main>`;
+  const links = family?.links ?? [];
+  const id = routeDeviceId();
+  const data = overview?.id === id ? overview : null;
+  const seen = data?.activity?.lastSeen;
+  const days = seen ? inactiveDays(seen) : 0;
+  return `${title}<main class="surface connections-screen family-overview">
+    ${links.length ? `<section><h2>选择一位家人</h2><div class="connection-actions">${links.map((person) => `<a class="button ${id === person.id ? '' : 'quiet'}" href="#/family-overview/${encodeURIComponent(person.id)}" ${id === person.id ? 'aria-current="page"' : ''}>${escapeHtml(person.name)}</a>`).join('')}</div></section>` : ''}
+    ${!id ? familyError ? `<p class="form-error" role="alert">${escapeHtml(familyError)}</p><button class="button quiet" data-action="reload-family" type="button">重新读取</button>`
+      : !links.length ? familyBusy ? '<p class="empty-card" role="status">正在读取家人…</p>' : '<p class="empty-card">先通过邀请码连接长辈。</p><a class="button" href="#/connections">去连接家人</a>' : '<p class="empty-card">选择家人后可查看对方分享的内容。</p>'
+      : data?.error ? `<p class="form-error" role="alert">${escapeHtml(data.error)}</p><button class="button quiet" type="button" data-action="reload-overview">重新读取</button>`
+      : !data || data.loading ? '<p class="empty-card" role="status">正在读取长辈分享的内容…</p>'
+      : `<div class="section-heading"><h2>${escapeHtml(data.name)}分享的内容</h2><button class="text-button" type="button" data-action="reload-overview">刷新</button></div>
+        <section class="overview-card"><h3>最近使用</h3>
+          <p>${data.activity ? seen ? `上次使用禾伴 ${formatWhen(seen)}` : '暂时还没有使用记录。' : '这位家人还未分享使用时间。'}</p>
+          ${seen && days >= data.activity.quietDays ? `<p>已 ${days} 天未打开禾伴。方便时可以打电话问候。</p>` : ''}</section>
+        <section class="overview-card"><h3>最近聊天和问答</h3>${data.chats ? [['ask', '生活问答'], ['chat', '聊聊天']].map(([mode, label]) => `<div class="overview-conversation"><h4>${label}</h4>
+          ${data.chats[mode].length ? `<ul class="record-list">${data.chats[mode].map((message) => `<li><strong>${message.role === 'user' ? '长辈' : '禾伴'}</strong>${message.at ? `<time datetime="${new Date(message.at).toISOString()}">${formatWhen(message.at)}</time>` : ''}<p>${escapeHtml(message.text)}</p></li>`).join('')}</ul>` : '<p>暂无聊天记录。</p>'}</div>`).join('')
+          : '<p>这位家人还未分享聊天内容。长辈可在「我的 → 和家人分享」里开启。</p>'}</section>`}
+  </main>`;
+}
+
+async function loadOverview() {
+  const id = routeDeviceId();
+  if (!id || account?.guest || route !== 'family-overview') return;
+  const active = account;
+  const current = { id, loading: true };
+  overview = current;
+  render();
+  try { Object.assign(current, await api(`/api/family/overview/${encodeURIComponent(id)}`)); }
+  catch (error) { current.error = error.message; }
+  finally {
+    current.loading = false;
+    if (active === account && overview === current && route === 'family-overview' && routeDeviceId() === id) render();
+  }
+}
+
+function showFamilyPermission(id) {
+  const person = family?.links.find((item) => item.id === id);
+  if (!person) return;
+  const permission = familyPermission(state, person);
+  showDialog(`分享给${escapeHtml(person.name)}`, `<form data-form="family-permission" data-id="${escapeHtml(id)}">
+    <label class="check-input"><input type="checkbox" name="activity" ${permission?.activity ? 'checked' : ''}><span>让对方查看我最近使用禾伴的时间</span></label>
+    <label class="check-input"><input type="checkbox" name="chats" ${permission?.chats ? 'checked' : ''}><span>让对方查看我最近的聊天和问答文字</span></label>
+    <p class="form-help">请由本人选择。开启后，对方可看到每个聊天页最近 12 条文字，取消勾选并保存即可关闭。</p>
+    <p class="form-error" role="alert"></p><button class="button wide" type="submit">保存分享设置</button>
+  </form>`);
+}
+
+async function saveFamilyPermission(form, data) {
+  const person = family?.links.find((item) => item.id === form.dataset.id);
+  if (!person) return;
+  const active = account;
+  const button = form.querySelector('[type=submit]');
+  const activity = data.has('activity');
+  const chats = data.has('chats');
+  state.familyVisibility = state.familyVisibility.filter((item) => item.id !== person.id);
+  if (activity || chats) state.familyVisibility.push({ id: person.id, linkedAt: person.linkedAt, activity, chats });
+  if (activity && document.visibilityState === 'visible') state.lastSeen = Date.now();
+  const notified = save();
+  button.disabled = true;
+  try {
+    if (!notified || !await flushCloud()) throw new Error('设置还没同步，请连接网络后重试。');
+    if (account !== active) return;
+    if (form.isConnected) dialog.close();
+    render();
+    notify('分享设置已保存。');
+  } catch (error) { form.querySelector('.form-error').textContent = error.message; }
+  finally { button.disabled = false; }
+}
+
 let familyLoad;
 async function loadFamily() {
   if (account?.guest) return;
   const active = account;
   if (familyLoad) return familyLoad;
+  const previous = family;
   familyBusy = true;
   familyError = '';
-  familyLoad = api('/api/family').then((data) => { if (account === active) family = data; },
+  familyLoad = api('/api/family').then((data) => { if (account === active && family === previous) family = data; },
     (error) => { if (account === active) familyError = error.message; })
     .finally(() => { if (account === active) { familyLoad = null; familyBusy = false; } });
   await familyLoad;
@@ -814,6 +973,7 @@ async function startCloud(mode) {
   familyLoad = null;
   familyError = '';
   familyBusy = false;
+  overview = null;
   invite = null;
   formMode = '';
   authPanel = false;
@@ -925,7 +1085,7 @@ function render() {
     'family-chat': () => chatScreen('family-chat'), reminders: () => remindersScreen('elder'),
     'family-reminders': () => remindersScreen('family'), devices: devicesScreen, device: deviceScreen,
     'family-devices': familyDevicesScreen, 'family-shortcuts': familyShortcutsScreen, 'device-editor': deviceEditorScreen, guides: guidesScreen, guide: guideScreen,
-    connections: connectionsScreen, 'shared-device': deviceScreen,
+    connections: connectionsScreen, 'shared-device': deviceScreen, 'home-shortcuts': homeShortcutsScreen, 'family-overview': familyOverviewScreen,
     capture: records.captureScreen, records: records.recordsScreen, record: records.recordScreen, 'assistant-settings': assistantSettings, mine: mineScreen,
   };
   app.innerHTML = screens[route]() + bottomNav();
@@ -1013,7 +1173,7 @@ async function sendMessage(text, retry = false) {
     const failed = failedReplies.get(mode);
     if (failed?.account !== active || messages.at(-1)?.id !== failed.questionId) return;
   } else {
-    messages.push({ id: crypto.randomUUID(), role: 'user', text: input });
+    messages.push({ id: crypto.randomUUID(), role: 'user', text: input, at: Date.now() });
   }
   failedReplies.delete(mode);
   const questionId = messages.at(-1).id;
@@ -1040,7 +1200,7 @@ async function sendMessage(text, retry = false) {
   }
   if (account !== active) return;
   if (failure) failedReplies.set(mode, { account: active, text: input, error: failure, questionId });
-  else messages.push({ id: crypto.randomUUID(), role: 'assistant', text: reply, draft: validDraft });
+  else messages.push({ id: crypto.randomUUID(), role: 'assistant', text: reply, draft: validDraft, at: Date.now() });
   if (messages.length > 150) messages.splice(0, messages.length - 150);
   noteActivity();
   save();
@@ -1053,7 +1213,7 @@ async function sendMessage(text, retry = false) {
     document.querySelector('.message:last-child')?.scrollIntoView({ block: 'nearest' });
     document.querySelector('#message-input')?.focus({ preventScroll: true });
   }
-  if (state.listen) speak(failure?.message || reply);
+  if (state.listen) speak(failure?.message || reply, state.speechRate, false);
 }
 
 function startVoice(button) {
@@ -1117,7 +1277,7 @@ function checkReminders() {
   due.notified = true;
   save();
   showDialog('提醒时间到了', `<p class="share-preview">${escapeHtml(due.title)}</p><div class="dialog-actions"><button class="button" type="button" data-action="complete" data-id="${due.id}">已完成</button><button class="button quiet" type="button" data-action="close">我知道了</button></div>`);
-  if (state.listen) speak(`提醒时间到了：${due.title}`);
+  if (state.listen) speak(`提醒时间到了：${due.title}`, state.speechRate, false);
 }
 
 document.addEventListener('click', (event) => {
@@ -1131,6 +1291,9 @@ document.addEventListener('click', (event) => {
   if (!account) return;
   if (recordRoutes.includes(route) && action.startsWith('capture-')) { void records.action(action, button); return; }
   if (action === 'remove-shortcut') { void removeShortcut(button); return; }
+  if (action === 'restore-shortcut') { state.hiddenShortcuts = state.hiddenShortcuts.filter((key) => key !== button.dataset.key); refresh('已恢复到首页。'); return; }
+  if (action === 'family-permission') { showFamilyPermission(id); return; }
+  if (action === 'reload-overview') { void loadOverview(); return; }
   if (action === 'cloud-retry') { void flushCloud(); return; }
   if (action === 'cloud-refresh') {
     showDialog('读取云端版本？', '<p class="form-help">本页尚未同步的修改将被放弃，账户会回到云端保存的版本。</p><button class="button wide" data-action="cloud-refresh-confirm" type="button">读取云端版本</button>');
@@ -1167,7 +1330,7 @@ document.addEventListener('click', (event) => {
       button.setAttribute('aria-pressed', String(state.listen));
       save();
       if (state.listen) speak('已开启听回复。');
-      else window.speechSynthesis?.cancel();
+      else stopSpeech();
       break;
     }
     case 'read': speak(text); break;
@@ -1285,6 +1448,7 @@ document.addEventListener('submit', (event) => {
       else void records.save(data);
       break;
     case 'family-shortcut': void submitShortcut(form, data); break;
+    case 'family-permission': void saveFamilyPermission(form, data); break;
     case 'join-family':
     case 'share-family': void familyForm(form, data); break;
     case 'device-guide': saveDeviceGuide(form); break;
@@ -1337,6 +1501,8 @@ document.addEventListener('change', async (event) => {
     const custom = field.form.querySelector('[data-shortcut-custom]');
     custom.hidden = field.value !== 'website';
     for (const input of custom.querySelectorAll('input')) input.required = !custom.hidden;
+    field.form.elements.title.required = !custom.hidden;
+    field.form.elements.target.disabled = custom.hidden;
     return;
   }
   if (field.name === 'persona' && field.form?.dataset.form === 'persona') {
@@ -1413,6 +1579,8 @@ function enterScreen(focus = false) {
   noteActivity();
   render();
   if (familyPages.includes(route)) void loadFamily();
+  if (route === 'family-overview') void loadOverview();
+  else overview = null;
   if (focus) {
     window.scrollTo(0, 0);
     document.querySelector('#screen-title')?.focus({ preventScroll: true });
@@ -1423,7 +1591,7 @@ function enterScreen(focus = false) {
 window.addEventListener('hashchange', () => {
   if (dialog.open) dialog.close();
   recognition?.abort();
-  window.speechSynthesis?.cancel();
+  stopSpeech();
   route = readRoute();
   if (!cloudSite && location.hash === '#/legacy' && !authBusy) { void boot(); return; }
   authPanel = false;
@@ -1431,7 +1599,10 @@ window.addEventListener('hashchange', () => {
 });
 document.addEventListener('visibilitychange', () => {
   noteActivity();
-  if (account && route === 'elder' && document.visibilityState === 'visible') void loadFamily();
+  if (account && document.visibilityState === 'visible') {
+    if (route === 'elder') void loadFamily();
+    if (route === 'family-overview') void loadOverview();
+  }
   if (account) checkReminders();
 });
 window.addEventListener('pagehide', records.stopCamera);
@@ -1442,5 +1613,6 @@ window.addEventListener('beforeunload', (event) => {
   if (unsyncedCloud()) { event.preventDefault(); event.returnValue = ''; }
 });
 setInterval(() => { if (account) checkReminders(); }, 10_000);
+window.speechSynthesis?.getVoices?.();
 if (!cloudSite) cloudEntry();
 void boot();

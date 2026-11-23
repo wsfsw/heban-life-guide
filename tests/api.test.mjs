@@ -92,7 +92,7 @@ test('family shortcuts are added for connected accounts and revoked with the con
   const family = client(env, 'child');
   const stranger = client(env, 'stranger');
   const path = '/api/family/shortcuts';
-  const feature = { kind: 'built-in', target: 'camera', recipient: 'elder' };
+  const feature = { kind: 'built-in', target: 'washer', title: '洗衣步骤', recipient: 'elder' };
   assert.equal((await family(path, 'POST', feature)).status, 403);
   const { code } = await (await family('/api/family/invite', 'POST')).json();
   assert.equal((await elder('/api/family/join', 'POST', { code })).status, 200);
@@ -101,14 +101,63 @@ test('family shortcuts are added for connected accounts and revoked with the con
   assert.equal(added.status, 201);
   assert.equal((await family(path, 'POST', feature)).status, 409);
   const { shortcuts } = await (await elder('/api/family')).json();
-  assert.equal(shortcuts[0].title, '拍照问一问');
+  assert.equal(shortcuts[0].title, '洗衣步骤');
+  assert.equal(shortcuts[0].target, 'washer');
   assert.equal(shortcuts[0].direction, 'received');
   assert.deepEqual((await (await stranger('/api/family')).json()).shortcuts, []);
-  assert.equal((await elder(path + '/' + shortcuts[0].id, 'DELETE')).status, 200);
+  assert.equal((await stranger(path + '/' + shortcuts[0].id, 'DELETE')).status, 200);
   assert.equal((await (await elder('/api/family')).json()).shortcuts.length, 1);
+  assert.equal((await elder(path + '/' + shortcuts[0].id, 'DELETE')).status, 200);
+  assert.deepEqual((await (await elder('/api/family')).json()).shortcuts, []);
+  assert.deepEqual((await (await family('/api/family')).json()).shortcuts, []);
+  assert.equal((await family(path, 'POST', { kind: 'built-in', target: 'camera', recipient: 'elder' })).status, 201);
   await elder('/api/family/link/child', 'DELETE');
   assert.deepEqual((await (await elder('/api/family')).json()).shortcuts, []);
   assert.deepEqual((await (await family('/api/family')).json()).shortcuts, []);
+});
+
+test('family overview reads only the linked elder’s opted-in activity and recent conversations', async (t) => {
+  const env = await localStorageBindings();
+  t.after(env.close);
+  const elder = client(env, 'elder');
+  const family = client(env, 'watcher');
+  const stranger = client(env, 'stranger');
+  const path = '/api/family/overview/elder';
+  const lastSeen = Date.now() - 60_000;
+  const state = { monitoring: true, lastSeen, messages: {
+    ask: Array.from({ length: 13 }, (_, i) => ({ id: `question-${i}`, role: 'user', text: `问题 ${i}`, at: lastSeen })),
+    chat: [{ id: 'reply', role: 'assistant', text: '您好。' }],
+    'family-chat': [{ id: 'private', role: 'user', text: '私下的家属聊天' }],
+  } };
+  assert.equal((await elder(statePath, 'PUT', { revision: 0, state })).status, 200);
+  assert.equal((await family(path)).status, 404);
+  const { code } = await (await elder('/api/family/invite', 'POST')).json();
+  assert.equal((await family('/api/family/join', 'POST', { code })).status, 200);
+  const { links } = await (await elder('/api/family')).json();
+  const person = links.find((item) => item.id === 'watcher');
+  const overview = async () => (await family(path)).json();
+  assert.deepEqual(await overview(), { name: '禾伴用户', activity: null, chats: null });
+  assert.equal((await stranger(path)).status, 404);
+  assert.equal((await client(env)(path)).status, 401);
+
+  const save = (revision, permission) => elder(statePath, 'PUT', { revision, state: { ...state, familyVisibility: permission ? [permission] : [] } });
+  assert.equal((await save(1, { id: person.id, linkedAt: person.linkedAt - 1, activity: true, chats: true })).status, 200);
+  assert.equal((await overview()).activity, null);
+  assert.equal((await save(2, { id: person.id, linkedAt: person.linkedAt, activity: true })).status, 200);
+  assert.deepEqual((await overview()).activity, { lastSeen, quietDays: 3 });
+  assert.equal((await overview()).chats, null);
+  assert.equal((await save(3, { id: person.id, linkedAt: person.linkedAt, chats: true })).status, 200);
+  const enabled = await overview();
+  assert.equal(enabled.activity, null);
+  assert.equal(enabled.chats.ask.length, 12);
+  assert.deepEqual(enabled.chats.ask[0], { role: 'user', text: '问题 1', at: lastSeen });
+  assert.deepEqual(enabled.chats.chat, [{ role: 'assistant', text: '您好。', at: null }]);
+  assert.equal(Object.hasOwn(enabled.chats, 'family-chat'), false);
+  assert.equal((await save(4, null)).status, 200);
+  assert.equal((await overview()).chats, null);
+  assert.equal((await save(5, { id: person.id, linkedAt: person.linkedAt, chats: true })).status, 200);
+  await family('/api/family/link/elder', 'DELETE');
+  assert.equal((await family(path)).status, 404);
 });
 
 test('login, account isolation, revision conflicts and cross-origin protection', async (t) => {
@@ -120,6 +169,7 @@ test('login, account isolation, revision conflicts and cross-origin protection',
   const saved = await elder(statePath, 'PUT', { revision: 0, state: {
     reminders: [{ id: 'reminder-1', title: '买菜', at: Date.now() + 3600_000, owner: 'elder' }],
     speechRate: 'faster',
+    hiddenShortcuts: ['bill', 'reminders', 'invalid'],
     guideRuns: { parcel: { version: 1, screen: 'code', updatedAt: Date.now(), history: ['pick'], failed: 0 } },
   } });
   assert.equal(saved.status, 200);
@@ -127,6 +177,7 @@ test('login, account isolation, revision conflicts and cross-origin protection',
   const mine = await (await elder(statePath)).json();
   assert.equal(mine.state.reminders[0].title, '买菜');
   assert.equal(mine.state.speechRate, 'faster');
+  assert.deepEqual(mine.state.hiddenShortcuts, ['bill', 'reminders']);
   assert.equal(mine.state.guideRuns.parcel.screen, 'code');
   assert.deepEqual((await (await client(env, 'stranger')(statePath)).json()).state, {});
   assert.equal((await elder(statePath, 'PUT', { revision: 0, state: {} })).status, 409);

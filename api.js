@@ -1,6 +1,6 @@
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
-import { speechRates } from './logic.js';
-import { cleanShortcut } from './shortcuts.js';
+import { familyPermission, speechRates } from './logic.js';
+import { cleanShortcut, defaultShortcuts } from './shortcuts.js';
 
 class RequestError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -319,7 +319,7 @@ function cleanMessages(source) {
     const at = timestamp(entry.draft?.at);
     const draft = at && lines(entry.draft.title, 80)
       ? { at, title: lines(entry.draft.title, 80), repeat: entry.draft.repeat === 'daily' ? 'daily' : 'never' } : null;
-    return [{ id: entry.id, role: entry.role, text, draft }];
+    return [{ id: entry.id, role: entry.role, text, draft, at: timestamp(entry.at) }];
   });
 }
 
@@ -349,6 +349,12 @@ async function cleanState(env, owner, source) {
       history: list(entry.history, 20).filter((key) => typeof key === 'string' && safeId.test(key)),
       failed: Number.isSafeInteger(entry.failed) ? Math.max(0, Math.min(10, entry.failed)) : 0 };
   }
+  const familyVisibility = list(source.familyVisibility, 50).flatMap((item) => {
+    if (!safeId.test(item?.id ?? '') || !timestamp(item.linkedAt)) return [];
+    const activity = item.activity === true;
+    const chats = item.chats === true;
+    return activity || chats ? [{ id: item.id, linkedAt: item.linkedAt, activity, chats }] : [];
+  });
   return {
     persona: ['小禾', '小松', '暖暖'].includes(source.persona) ? source.persona : '小禾',
     interests: lines(source.interests, 80), contactName: lines(source.contactName, 18) || '爸妈',
@@ -356,7 +362,9 @@ async function cleanState(env, owner, source) {
     listen: Boolean(source.listen), greeted: Boolean(source.greeted),
     speechRate: Object.hasOwn(speechRates, source.speechRate) ? source.speechRate : 'normal',
     monitoring: Boolean(source.monitoring), quietDays: [1, 2, 3, 5, 7].includes(source.quietDays) ? source.quietDays : 3,
-    lastSeen: source.monitoring ? timestamp(source.lastSeen) : null,
+    lastSeen: source.monitoring || familyVisibility.some((item) => item.activity) ? timestamp(source.lastSeen) : null,
+    familyVisibility,
+    hiddenShortcuts: defaultShortcuts.filter((key) => list(source.hiddenShortcuts, defaultShortcuts.length).includes(key)),
     shortcuts: list(source.shortcuts, 12).flatMap((entry) => {
       const shortcut = cleanShortcut(entry);
       return shortcut && safeId.test(entry.id ?? '') ? [{ id: entry.id, ...shortcut }] : [];
@@ -370,7 +378,7 @@ const connection = 'person_a = min(?, ?) AND person_b = max(?, ?)';
 const pair = (a, b) => [a, b, a, b];
 
 async function familyData(db, user) {
-  const links = await all(db, `SELECT p.user_id as id, p.display_name as name
+  const links = await all(db, `SELECT p.user_id as id, p.display_name as name, f.created_at AS linkedAt
     FROM family_links f JOIN profiles p ON p.user_id = CASE WHEN f.person_a = ? THEN f.person_b ELSE f.person_a END
     WHERE f.person_a = ? OR f.person_b = ? ORDER BY f.created_at DESC`, user.id, user.id, user.id);
   const items = await all(db, `SELECT s.id, s.kind, s.payload, s.created_at as at,
@@ -384,6 +392,22 @@ async function familyData(db, user) {
     JOIN profiles p ON p.user_id = CASE WHEN s.sender_id = ? THEN s.recipient_id ELSE s.sender_id END
     WHERE s.recipient_id = ? OR s.sender_id = ? ORDER BY s.created_at DESC LIMIT 100`, user.id, user.id, user.id, user.id);
   return { links, items: items.map((item) => ({ ...item, payload: JSON.parse(item.payload) })), shortcuts };
+}
+
+async function familyOverview(db, viewer, other) {
+  if (!safeId.test(other) || other === viewer.id) fail(404, '找不到这位家人。');
+  const person = await get(db, `SELECT p.display_name AS name, p.state, f.created_at AS linkedAt
+    FROM family_links f JOIN profiles p ON p.user_id = ? WHERE ${connection}`, other, ...pair(viewer.id, other));
+  if (!person) fail(404, '先和这位家人建立连接。');
+  const state = JSON.parse(person.state);
+  const permission = familyPermission(state, { id: viewer.id, linkedAt: person.linkedAt });
+  const recent = (mode) => cleanMessages(state.messages?.[mode]).slice(-12).map(({ role, text, at }) => ({ role, text, at }));
+  const lastSeen = timestamp(state.lastSeen);
+  return {
+    name: person.name,
+    activity: permission?.activity === true ? { lastSeen: lastSeen ? Math.min(lastSeen, Date.now()) : null, quietDays: state.quietDays ?? 3 } : null,
+    chats: permission?.chats === true ? { ask: recent('ask'), chat: recent('chat') } : null,
+  };
 }
 
 async function routeApi(request, env) {
@@ -443,6 +467,9 @@ async function routeApi(request, env) {
   if (method === 'GET' && pathname === '/api/family') {
     await ownedProfile(db, user);
     return json(await familyData(db, user));
+  }
+  if (method === 'GET' && pathname.startsWith('/api/family/overview/')) {
+    return json(await familyOverview(db, user, pathname.split('/').at(-1)));
   }
   if (method === 'POST' && pathname === '/api/family/invite') {
     await ownedProfile(db, user);
@@ -517,7 +544,7 @@ async function routeApi(request, env) {
   if (method === 'DELETE' && pathname.startsWith('/api/family/shortcuts/')) {
     const id = pathname.split('/').at(-1);
     if (!safeId.test(id ?? '')) fail(404, '找不到这个功能。');
-    await run(db, 'DELETE FROM family_shortcuts WHERE id = ? AND sender_id = ?', id, user.id);
+    await run(db, 'DELETE FROM family_shortcuts WHERE id = ? AND (sender_id = ? OR recipient_id = ?)', id, user.id, user.id);
     return json(await familyData(db, user));
   }
   fail(404, '没有这个功能入口。');
