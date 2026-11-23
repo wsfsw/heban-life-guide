@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { askAssistant, directAssistantUrl } from '../assistant-client.js';
 
 const site = 'https://heban.test/';
-let independentOrigin;
-globalThis.document = { querySelector: (selector) => ({ content: selector.includes('assistant-origin') ? independentOrigin : site }) };
+let independentEndpoint;
+globalThis.document = { querySelector: (selector) => ({ content: selector.includes('assistant-url') ? independentEndpoint : site }) };
 globalThis.location = new URL('https://wsfsw.github.io/heban-life-guide-pages/');
 let online = true;
 Object.defineProperty(navigator, 'onLine', { get: () => online });
@@ -51,11 +51,11 @@ test('assistant calls out a timeout and preserves useful server errors', async (
 });
 
 test('GitHub Pages sends text and photos only to its configured independent assistant', async (t) => {
-  independentOrigin = 'https://assistant.heban.test';
-  t.after(() => { independentOrigin = undefined; });
+  independentEndpoint = 'https://assistant.heban.test/functions/v1/assistant';
+  t.after(() => { independentEndpoint = undefined; });
   const photo = 'data:image/jpeg;base64,/9j/2Q==';
   const fetch = t.mock.method(globalThis, 'fetch', async (url, request) => {
-    assert.equal(url.href, `${independentOrigin}/api/assistant`);
+    assert.equal(url.href, independentEndpoint);
     assert.equal(request.headers['Content-Type'], 'text/plain;charset=UTF-8');
     const input = JSON.parse(request.body);
     return Response.json(input.photo ? { analysis: { observation: '看到了遥控器。' } } : { answer: '您好。' });

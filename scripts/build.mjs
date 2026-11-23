@@ -49,20 +49,22 @@ async function buildAssets() {
   return assets;
 }
 
-function independentAssistantOrigin() {
-  const configured = process.env.HEBAN_ASSISTANT_ORIGIN?.trim();
+function independentAssistantUrl() {
+  const endpoint = process.env.HEBAN_ASSISTANT_URL?.trim();
+  const configured = endpoint || process.env.HEBAN_ASSISTANT_ORIGIN?.trim();
   if (!configured) return '';
   const url = new URL(configured);
-  if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash
-    || url.hostname === 'chatgpt.site' || url.hostname.endsWith('.chatgpt.site')) {
-    throw new Error('HEBAN_ASSISTANT_ORIGIN must be an independent HTTPS origin without a path.');
+  const host = url.hostname.replace(/\.$/, '');
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash
+    || host === 'chatgpt.site' || host.endsWith('.chatgpt.site') || (!endpoint && url.pathname !== '/')) {
+    throw new Error('Configure an independent HTTPS assistant endpoint without credentials, query or fragment.');
   }
-  return url.origin;
+  return endpoint ? url.href : new URL('/api/assistant', url).href;
 }
 
 async function buildPages(assets) {
   const cloudSite = 'https://heban-life-guide.wsfsw2008.chatgpt.site/';
-  const assistantOrigin = independentAssistantOrigin();
+  const assistantUrl = independentAssistantUrl();
   const { outputFiles: [bundle] } = await build({
     entryPoints: [fileURLToPath(new URL('app.js', root))], bundle: true,
     platform: 'browser', format: 'esm', write: false, target: 'es2021',
@@ -73,7 +75,7 @@ async function buildPages(assets) {
     let contents = asset.encoded ? Buffer.from(asset.encoded, 'base64') : asset.body;
     if (path === '/app.js') contents = bundle.contents;
     if (path === '/index.html') {
-      const assistantMeta = assistantOrigin ? `<meta name="heban-assistant-origin" content="${assistantOrigin}">\n    ` : '';
+      const assistantMeta = assistantUrl ? `<meta name="heban-assistant-url" content="${assistantUrl.replaceAll('&', '&amp;')}">\n    ` : '';
       contents = contents.replace('<title>', `<meta name="heban-cloud-site" content="${cloudSite}">\n    ${assistantMeta}<title>`)
         .replace('src="./app.js"', `src="./app.js?v=${version}"`);
     }

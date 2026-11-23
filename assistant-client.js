@@ -1,9 +1,9 @@
 const cloudSite = () => document.querySelector('meta[name="heban-cloud-site"]')?.content;
-const assistantOrigin = () => document.querySelector('meta[name="heban-assistant-origin"]')?.content;
+const assistantUrl = () => document.querySelector('meta[name="heban-assistant-url"]')?.content;
 
 export function directAssistantUrl(route) {
   const site = cloudSite();
-  return site && !assistantOrigin() ? new URL(`#/${route}`, site).href : '';
+  return site && !assistantUrl() ? new URL(`#/${route}`, site).href : '';
 }
 
 function connectionError(message) {
@@ -46,7 +46,8 @@ function responseError(response, result) {
 }
 
 export async function askAssistant(input) {
-  const endpoint = new URL('/api/assistant', assistantOrigin() || cloudSite() || location.origin);
+  const configured = assistantUrl();
+  const endpoint = configured ? new URL(configured) : new URL('/api/assistant', cloudSite() || location.origin);
   const timeout = requestTimeout(32_000);
   let response;
   let result;

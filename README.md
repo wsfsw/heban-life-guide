@@ -17,7 +17,7 @@
 
 在 Node.js 24 或更新版本上，将 `DEEPSEEK_API_KEY` 配置为后台环境变量，运行 `npm run start:assistant`。服务默认监听本机 `4181`，提供 `/api/assistant`。可用 `PORT` 指定端口，用 `HEBAN_ASSISTANT_DATA_DIR` 指向持久存储。对外服务由 HTTPS 反向代理转发。若反向代理会追加访问者的 IP，可用 `HEBAN_ASSISTANT_TRUSTED_PROXY` 声明该代理的地址。
 
-发布 GitHub Pages 时，将 `HEBAN_ASSISTANT_ORIGIN` 设置成独立后台的 HTTPS 域名，再运行 `npm run build:pages`。这个地址用于问答和照片分析。登录、云端记录和家庭分享仍走原云端入口。`npm run build:assistant` 也可生成适合 Worker 运行时的构建产物。将 `scripts/assistant-schema.sql` 应用于后端数据库并绑定为 `DB`。
+发布 GitHub Pages 时，将 `HEBAN_ASSISTANT_ORIGIN` 设置成独立后台的 HTTPS 域名，再运行 `npm run build:pages`。如果接口路径有别于 `/api/assistant`，用 `HEBAN_ASSISTANT_URL` 指定完整的 HTTPS 接口地址。这个地址用于问答和照片分析。登录、云端记录和家庭分享仍走原云端入口。`npm run build:assistant` 也可生成适合 Worker 运行时的构建产物。将 `scripts/assistant-schema.sql` 应用于后端数据库并绑定为 `DB`。
 
 从「家属端 → 长辈端常用功能」添加内置入口或 HTTPS 网页。已连接的家庭账号可以把入口同步到长辈的首页。游客入口保存在同一个浏览器。
 
