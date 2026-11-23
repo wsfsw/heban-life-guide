@@ -1,8 +1,9 @@
 const cloudSite = () => document.querySelector('meta[name="heban-cloud-site"]')?.content;
+const assistantOrigin = () => document.querySelector('meta[name="heban-assistant-origin"]')?.content;
 
 export function directAssistantUrl(route) {
   const site = cloudSite();
-  return site ? new URL(`#/${route}`, site).href : '';
+  return site && !assistantOrigin() ? new URL(`#/${route}`, site).href : '';
 }
 
 function connectionError(message) {
@@ -45,15 +46,14 @@ function responseError(response, result) {
 }
 
 export async function askAssistant(input) {
-  const site = cloudSite();
-  const endpoint = new URL('/api/assistant', site || location.origin);
+  const endpoint = new URL('/api/assistant', assistantOrigin() || cloudSite() || location.origin);
   const timeout = requestTimeout(32_000);
   let response;
   let result;
   try {
     response = await fetch(endpoint, {
       method: 'POST', credentials: 'omit',
-      headers: { 'Content-Type': site ? 'text/plain;charset=UTF-8' : 'application/json' },
+      headers: { 'Content-Type': endpoint.origin === location.origin ? 'application/json' : 'text/plain;charset=UTF-8' },
       body: JSON.stringify(input), signal: timeout.signal,
     });
     result = await response.json();

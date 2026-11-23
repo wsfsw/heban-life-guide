@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { handleApi } from '../api.js';
 import { localStorageBindings } from '../scripts/storage.mjs';
+import assistantWorker from '../scripts/assistant-worker.mjs';
 
 const origin = 'https://heban.test';
 const statePath = '/api/state';
@@ -48,9 +49,13 @@ test('assistant sends text and inline images to DeepSeek and returns the allowed
   const imageInput = { photo: 'data:image/jpeg;base64,/9j/2Q==', text: '想制冷' };
   assert.equal((await local('/api/assistant', 'POST', imageInput, 'https://elsewhere.test', 'text/plain')).status, 403);
   assert.equal((await local('/api/assistant', 'POST', imageInput, origin, 'text/plain')).status, 400);
-  const image = await local('/api/assistant', 'POST', imageInput, pages, 'text/plain;charset=UTF-8');
+  const independentOrigin = 'https://assistant.heban.test';
+  const image = await assistantWorker.fetch(new Request(independentOrigin + '/api/assistant', {
+    method: 'POST', headers: { Origin: pages, 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(imageInput),
+  }), env);
   assert.equal(image.headers.get('access-control-allow-origin'), pages);
   assert.deepEqual(await image.json(), { analysis: fixture });
+  assert.equal((await assistantWorker.fetch(new Request(independentOrigin + '/api/state'), env)).status, 404);
   assert.equal(call.mock.callCount(), 2);
 });
 

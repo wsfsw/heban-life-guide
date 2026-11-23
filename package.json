@@ -5,8 +5,9 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:pages": "node scripts/build.mjs --pages",
+    "build:assistant": "node scripts/build.mjs --assistant",
     "start": "node scripts/local.mjs",
-    "check": "node --check app.js && node --check records.js && node --check cloud.js && node --check guest.js && node --check sign-in.js && node --check assistant-client.js && node --check shortcuts.js && node --check api.js && node --check scripts/build.mjs && node --check scripts/local.mjs",
+    "check": "node --check app.js && node --check records.js && node --check cloud.js && node --check guest.js && node --check sign-in.js && node --check assistant-client.js && node --check shortcuts.js && node --check api.js && node --check scripts/build.mjs && node --check scripts/local.mjs && node --check scripts/assistant-worker.mjs",
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
