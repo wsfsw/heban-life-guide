@@ -10,6 +10,7 @@ import { signInWithDevice } from './sign-in.js';
 import { askAssistant, directAssistantUrl } from './assistant-client.js';
 import { cleanShortcut, defaultShortcuts, shortcutOptions } from './shortcuts.js';
 import { createElectricityCards } from './electricity.js';
+import { createPhoneGuide, phoneTopic } from './phone-guide.js';
 
 const app = document.querySelector('#app');
 const cloudSite = document.querySelector('meta[name="heban-cloud-site"]')?.content;
@@ -53,6 +54,8 @@ const icon = (name, size = 24) => `<svg width="${size}" height="${size}" viewBox
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const records = createRecords({ paint: render, pageHeader, escapeHtml, icon, showDialog, closeDialog: () => dialog.close(), notify, isGuest: () => account?.guest });
 const electricity = createElectricityCards({ api, escapeHtml, pageHeader, loginAction, render, speak, stopSpeech, account: () => account, family: () => family });
+const phoneGuide = createPhoneGuide({ dialog, showDialog, api: askAssistant, esc: escapeHtml,
+  speak: (text, status) => speak(text, state.speechRate, true, status), stopSpeech, getAccount: () => account });
 
 let state = newState();
 let route = readRoute();
@@ -135,12 +138,13 @@ function stopSpeech() {
   if (engine?.speaking || engine?.pending) engine.cancel();
 }
 
-function speak(text, rate = state.speechRate, manual = true) {
+function speak(text, rate = state.speechRate, manual = true, onStatus) {
   if (!text?.trim()) return;
   const engine = window.speechSynthesis;
   const Utterance = window.SpeechSynthesisUtterance;
   if (!engine || !Utterance) {
     notify('当前浏览器不提供朗读。请用手机自带的浏览器打开禾伴。');
+    onStatus?.('error');
     return;
   }
   stopSpeech();
@@ -154,7 +158,8 @@ function speak(text, rate = state.speechRate, manual = true) {
   function failure(error) {
     if (speechQueue !== queue) return;
     stopSpeech();
-    if (error === 'canceled' || error === 'interrupted') return;
+    if (error === 'canceled' || error === 'interrupted') { onStatus?.('ended'); return; }
+    onStatus?.('error');
     notify(!manual ? '自动朗读未启动。请点回复下方的「朗读」。'
       : error === 'voice-unavailable' || error === 'language-unavailable' ? '这台手机缺少中文语音。请在手机系统里添加中文语音。'
       : '没有开始朗读。请检查媒体音量，或用手机自带的浏览器打开禾伴。');
@@ -163,12 +168,16 @@ function speak(text, rate = state.speechRate, manual = true) {
     if (speechQueue !== queue) return;
     clearTimeout(queue.startTimer);
     const part = chunks.shift();
-    if (!part) { speechQueue = null; return; }
+    if (!part) { speechQueue = null; onStatus?.('ended'); return; }
     const item = new Utterance(part);
     item.lang = voice?.lang ?? 'zh-CN';
     if (voice) item.voice = voice;
     item.rate = speechRates[rate]?.value ?? speechRates.normal.value;
-    item.onstart = () => clearTimeout(queue.startTimer);
+    item.onstart = () => {
+      if (speechQueue !== queue) return;
+      clearTimeout(queue.startTimer);
+      onStatus?.('playing');
+    };
     item.onend = next;
     item.onerror = (event) => failure(event.error);
     queue.utterance = item;
@@ -450,6 +459,7 @@ function chatScreen(mode) {
       ${waiting ? '<p class="assistant-wait" role="status">禾伴正在回答…</p>' : ''}
       ${failure?.account === account ? `<div class="assistant-retry"><p role="alert">${escapeHtml(failure.error.message)}</p>
         <button type="button" class="button quiet" data-action="assistant-retry">再问一次</button>
+        ${mode === 'ask' && phoneTopic(failure.text) ? phoneGuideButton(failure.questionId) : ''}
         ${direct ? `<a class="button quiet" href="${escapeHtml(direct)}" target="_blank" rel="noopener">直接打开助手</a>` : ''}
         ${mode === 'ask' ? '<a class="section-link" href="#/guides">先看操作步骤</a>' : ''}</div>` : ''}
     </div>
@@ -461,9 +471,16 @@ function chatScreen(mode) {
     </div></main>`;
 }
 
+function phoneGuideButton(questionId) {
+  return `<button class="button quiet phone-offer" type="button" data-action="open-phone-guide" data-id="${escapeHtml(questionId)}">${icon('sound', 20)}听着一步一步做</button>`;
+}
+
 function renderMessage(message) {
   const tools = [];
   if (message.role === 'assistant') tools.push(`<button class="message-action" type="button" data-action="read" data-text="${escapeHtml(message.text)}" aria-label="朗读这条回复">${icon('sound', 17)}朗读</button>`);
+  if (route === 'ask' && message.guideFor && state.messages.ask.some((item) => item.role === 'user' && item.id === message.guideFor)) {
+    tools.push(phoneGuideButton(message.guideFor));
+  }
   if (route === 'ask' && message.role === 'user') {
     tools.push(`<button class="message-action" type="button" data-action="share" data-id="${message.id}">分享给家人</button>`);
   }
@@ -973,6 +990,7 @@ async function startCloud(mode) {
   const switching = Boolean(authMode && mode !== authMode);
   const result = await connectCloud(updateCloudStatus, mode);
   electricity.reset();
+  phoneGuide.reset();
   account = result.user;
   authMode = mode;
   account = mode === 'legacy' ? { ...account, legacy: true } : account;
@@ -1052,6 +1070,7 @@ async function chooseAccess(action, button) {
       await flushBeforeSwitch();
       if (authMode === 'account') await api('/api/auth/logout', 'POST');
       electricity.reset();
+      phoneGuide.reset();
       accessPreference('');
       account = null;
       authMode = '';
@@ -1192,6 +1211,7 @@ async function sendMessage(text, retry = false) {
   const draft = /提醒|叫我|记得/.test(input) ? parseReminder(input) : null;
   const validDraft = draft?.title && draft.at > Date.now() ? draft : null;
   let reply;
+  let offerPhoneGuide = false;
   let failure;
   if (validDraft) reply = `提醒已经填好：${formatWhen(validDraft.at)}，${validDraft.title}。请核对一下，再保存。`;
   else {
@@ -1200,7 +1220,9 @@ async function sendMessage(text, retry = false) {
     render();
     document.querySelector('.assistant-wait')?.scrollIntoView({ block: 'nearest' });
     try {
-      reply = (await askAssistant({ text: input, history, style: state.persona })).answer;
+      const result = await askAssistant({ text: input, history, style: state.persona, ...(mode === 'ask' ? { suggestPhoneGuide: true } : {}) });
+      reply = result.answer;
+      offerPhoneGuide = mode === 'ask' && (result.offerPhoneGuide === true || Boolean(phoneTopic(input)));
       if (!reply) throw new Error('没有收到回复。');
     }
     catch (error) {
@@ -1210,7 +1232,8 @@ async function sendMessage(text, retry = false) {
   }
   if (account !== active) return;
   if (failure) failedReplies.set(mode, { account: active, text: input, error: failure, questionId });
-  else messages.push({ id: crypto.randomUUID(), role: 'assistant', text: reply, draft: validDraft, at: Date.now() });
+  else messages.push({ id: crypto.randomUUID(), role: 'assistant', text: reply, draft: validDraft, at: Date.now(),
+    ...(offerPhoneGuide ? { guideFor: questionId } : {}) });
   if (messages.length > 150) messages.splice(0, messages.length - 150);
   noteActivity();
   save();
@@ -1299,6 +1322,16 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (!account) return;
+  if (action === 'open-phone-guide' && route === 'ask') {
+    const messages = state.messages.ask;
+    const index = messages.findIndex((item) => item.role === 'user' && item.id === id);
+    if (index !== -1) {
+      stopSpeech();
+      phoneGuide.open(messages[index], messages.slice(Math.max(0, index - 4), index).map(({ role, text }) => ({ role, text })));
+    }
+    return;
+  }
+  if (action.startsWith('phone-')) { phoneGuide.action(action.slice('phone-'.length)); return; }
   if (action.startsWith('electricity-')) { void electricity.action(action.slice('electricity-'.length), button, event); return; }
   if (action === 'hide-electricity' || action === 'restore-electricity') {
     void electricity.visibility(id, action === 'hide-electricity', button).catch(actionError);
@@ -1580,6 +1613,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 dialog.addEventListener('close', () => {
+  if (!dialog.open) phoneGuide.close();
   if (returnFocus?.isConnected) returnFocus.focus();
   returnFocus = null;
 });
@@ -1637,6 +1671,7 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', records.stopCamera);
 window.addEventListener('pagehide', electricity.stopMedia);
+window.addEventListener('pagehide', phoneGuide.close);
 window.addEventListener('pageshow', (event) => {
   if (event.persisted && route === 'capture') void records.action('capture-reset');
 });

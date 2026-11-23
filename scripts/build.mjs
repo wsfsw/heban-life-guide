@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { phoneAudio, phoneLessons } from '../phone-guide.js';
 
 const output = new URL('../dist/server/', import.meta.url);
 const pagesOutput = new URL('../dist-pages/', import.meta.url);
@@ -36,11 +37,20 @@ async function buildAssets() {
     'assistant-client.js': 'text/javascript; charset=utf-8',
     'shortcuts.js': 'text/javascript; charset=utf-8',
     'electricity.js': 'text/javascript; charset=utf-8',
+    'phone-guide.js': 'text/javascript; charset=utf-8',
   };
   const assets = Object.fromEntries(await Promise.all(Object.entries(types).map(async ([file, type]) => [`/${file}`, { type, body: await read(file) }])));
   for (const file of ['guide-kit.webp', 'voice-card.webp']) {
     const path = 'assets/' + file;
     assets['/' + path] = { type: 'image/webp', encoded: (await readFile(new URL(path, root))).toString('base64') };
+  }
+  for (const [platform, topics] of Object.entries(phoneLessons)) {
+    for (const [topic, steps] of Object.entries(topics)) {
+      for (const index of steps.keys()) {
+        const path = phoneAudio(platform, topic, index);
+        assets['/' + path] = { type: 'audio/mpeg', encoded: (await readFile(new URL(path, root))).toString('base64') };
+      }
+    }
   }
   const browser = await build({
     entryPoints: [fileURLToPath(new URL('sign-in.js', root))], bundle: true,

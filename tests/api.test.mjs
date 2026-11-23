@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { handleApi } from '../api.js';
 import { localStorageBindings } from '../scripts/storage.mjs';
 import assistantWorker from '../scripts/assistant-worker.mjs';
+import { phoneTopic } from '../phone-guide.js';
 
 const origin = 'https://heban.test';
 const statePath = '/api/state';
@@ -57,6 +58,32 @@ test('assistant sends text and inline images to DeepSeek and returns the allowed
   assert.deepEqual(await image.json(), { analysis: fixture });
   assert.equal((await assistantWorker.fetch(new Request(independentOrigin + '/api/state'), env)).status, 404);
   assert.equal(call.mock.callCount(), 2);
+});
+
+test('phone guidance is an optional assistant reply action with platform-specific steps', async (t) => {
+  const env = await localStorageBindings();
+  t.after(env.close);
+  env.DEEPSEEK_API_KEY = 'fixture-key';
+  const local = client(env);
+  t.mock.method(globalThis, 'fetch', async (_url, { body }) => {
+    const request = JSON.parse(body);
+    assert.equal(request.response_format.type, 'json_object');
+    const system = request.messages[0].content;
+    const response = system.includes('这台是苹果手机')
+      ? { title: '微信发照片', steps: ['打开微信。', '点进联系人的聊天。'] }
+      : { answer: '可以从微信聊天里的加号开始。', offerPhoneGuide: request.messages.at(-1).content.includes('微信') };
+    return Response.json({ choices: [{ message: { content: JSON.stringify(response) } }] });
+  });
+  const question = '微信怎么发照片？';
+  const suggested = await local('/api/assistant', 'POST', { text: question, suggestPhoneGuide: true });
+  assert.deepEqual(await suggested.json(), { answer: '可以从微信聊天里的加号开始。', offerPhoneGuide: true });
+  const unrelated = await local('/api/assistant', 'POST', { text: '你好吗？', suggestPhoneGuide: true });
+  assert.equal((await unrelated.json()).offerPhoneGuide, false);
+  const selected = await local('/api/assistant', 'POST', { text: question, phonePlatform: 'iphone' });
+  assert.deepEqual((await selected.json()).phoneGuide.steps, ['打开微信。', '点进联系人的聊天。']);
+  assert.equal(phoneTopic('怎么放大手机字体？'), 'font');
+  assert.equal(phoneTopic('怎么连家里的 Wi-Fi？'), 'wifi');
+  assert.equal(phoneTopic('怎么关闭 Wi-Fi？'), '');
 });
 
 test('assistant distinguishes a shared network limit from the site-wide limit', async (t) => {
