@@ -15,7 +15,9 @@
 
 在「拍照问一问」预览照片，填写想完成的事，点「请助手看看」获得操作步骤、核对点和下一步选择。在线聊天和照片分析使用 DeepSeek。问答发送最近的对话，方便继续追问。连接失败时可重试，也可打开「跟着做」查看操作步骤。`DEEPSEEK_API_KEY` 由助手后台的运行时密钥管理。照片只在点击分析时发送，记录仍由用户单独保存。
 
-`npm run build:assistant` 生成独立的 `dist/assistant/index.js`，可作为 Cloudflare Worker 部署。将 `scripts/assistant-schema.sql` 应用于单独的 D1 数据库，将该库绑定为 `DB`，并配置 `DEEPSEEK_API_KEY`。发布 GitHub Pages 时，可将 `HEBAN_ASSISTANT_ORIGIN` 设置成独立后台的 HTTPS 域名，再运行 `npm run build:pages`。已配置的独立后台会接手问答和照片分析。登录及家庭连接仍通过原云端入口提供。
+在 Node.js 24 或更新版本上，将 `DEEPSEEK_API_KEY` 配置为后台环境变量，运行 `npm run start:assistant`。服务默认监听本机 `4181`，提供 `/api/assistant`。可用 `PORT` 指定端口，用 `HEBAN_ASSISTANT_DATA_DIR` 指向持久存储。对外服务由 HTTPS 反向代理转发。若反向代理会追加访问者的 IP，可用 `HEBAN_ASSISTANT_TRUSTED_PROXY` 声明该代理的地址。
+
+发布 GitHub Pages 时，将 `HEBAN_ASSISTANT_ORIGIN` 设置成独立后台的 HTTPS 域名，再运行 `npm run build:pages`。这个地址用于问答和照片分析。登录、云端记录和家庭分享仍走原云端入口。`npm run build:assistant` 也可生成适合 Worker 运行时的构建产物。将 `scripts/assistant-schema.sql` 应用于后端数据库并绑定为 `DB`。
 
 从「家属端 → 长辈端常用功能」添加内置入口或 HTTPS 网页。已连接的家庭账号可以把入口同步到长辈的首页。游客入口保存在同一个浏览器。
 
