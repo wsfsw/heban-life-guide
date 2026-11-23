@@ -7,7 +7,7 @@
     "build:pages": "node scripts/build.mjs --pages",
     "start": "node scripts/local.mjs",
     "check": "node --check app.js && node --check records.js && node --check cloud.js && node --check guest.js && node --check sign-in.js && node --check assistant-client.js && node --check shortcuts.js && node --check api.js && node --check scripts/build.mjs && node --check scripts/local.mjs",
-    "test": "node --test tests/api.test.mjs"
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@simplewebauthn/browser": "13.3.0",

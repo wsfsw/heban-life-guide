@@ -54,6 +54,32 @@ test('assistant sends text and inline images to DeepSeek and returns the allowed
   assert.equal(call.mock.callCount(), 2);
 });
 
+test('assistant distinguishes a shared network limit from the site-wide limit', async (t) => {
+  const env = await localStorageBindings();
+  t.after(env.close);
+  env.DEEPSEEK_API_KEY = 'fixture-key';
+  const ip = '192.0.2.5';
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('heban:' + ip));
+  const visitor = Buffer.from(hash).toString('hex');
+  const fill = (count, prefix, key) => env.DB.prepare(`WITH RECURSIVE sequence(n) AS (
+    SELECT 1 UNION ALL SELECT n + 1 FROM sequence WHERE n < ?
+  ) INSERT INTO assistant_requests SELECT ? || n, ?, ? FROM sequence`)
+    .bind(count, prefix, key, Date.now()).run();
+  const post = () => handleApi(new Request(origin + '/api/assistant', {
+    method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', 'CF-Connecting-IP': ip },
+    body: JSON.stringify({ text: '你好' }),
+  }), env);
+
+  await fill(18, 'network-', visitor);
+  const networkLimit = await post();
+  assert.equal(networkLimit.status, 429);
+  assert.match((await networkLimit.json()).error, /当前网络的提问次数/);
+  await fill(102, 'site-', 'another-network');
+  const dailyLimit = await post();
+  assert.equal(dailyLimit.status, 429);
+  assert.match((await dailyLimit.json()).error, /助手的使用次数/);
+});
+
 test('family shortcuts are added for connected accounts and revoked with the connection', async (t) => {
   const env = await localStorageBindings();
   t.after(env.close);

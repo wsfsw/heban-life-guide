@@ -7,7 +7,7 @@ import { lifeGuides, readGuideRun, setGuideScreen, previousGuideScreen } from '.
 import { api, photoUrl, connectCloud, saveCloud, flushCloud, unsyncedCloud } from './cloud.js';
 import { createRecords } from './records.js';
 import { signInWithDevice } from './sign-in.js';
-import { askAssistant } from './assistant-client.js';
+import { askAssistant, directAssistantUrl } from './assistant-client.js';
 import { cleanShortcut, shortcutOptions } from './shortcuts.js';
 
 const app = document.querySelector('#app');
@@ -344,6 +344,7 @@ function chatScreen(mode) {
   const config = chatConfig[mode];
   const waiting = pendingReplies.get(mode) === account;
   const failure = failedReplies.get(mode);
+  const direct = failure?.error.canOpenDirect && failure.account === account ? directAssistantUrl(mode) : '';
   const interest = mode === 'chat' ? state.interests.split(/[、，,\s]+/).find(Boolean) : '';
   const greeting = config.greeting.replace('{name}', state.persona) + (interest ? `也可以聊聊您喜欢的「${interest.slice(0, 24)}」。` : '');
   const messages = [{ role: 'assistant', text: greeting }, ...state.messages[mode]];
@@ -357,8 +358,9 @@ function chatScreen(mode) {
       </div>`}
     <div class="message-list" role="log" aria-label="聊天记录">${messages.map(renderMessage).join('')}
       ${waiting ? '<p class="assistant-wait" role="status">禾伴正在回答…</p>' : ''}
-      ${failure?.account === account ? `<div class="assistant-retry" role="status"><p>${escapeHtml(failure.error)}</p>
+      ${failure?.account === account ? `<div class="assistant-retry"><p role="alert">${escapeHtml(failure.error.message)}</p>
         <button type="button" class="button quiet" data-action="assistant-retry">再问一次</button>
+        ${direct ? `<a class="button quiet" href="${escapeHtml(direct)}" target="_blank" rel="noopener">直接打开助手</a>` : ''}
         ${mode === 'ask' ? '<a class="section-link" href="#/guides">先看操作步骤</a>' : ''}</div>` : ''}
     </div>
     <div class="composer-area">
@@ -1032,7 +1034,7 @@ async function sendMessage(text, retry = false) {
       if (!reply) throw new Error('没有收到回复。');
     }
     catch (error) {
-      failure = error.message;
+      failure = error;
     }
     finally { if (pendingReplies.get(mode) === active) pendingReplies.delete(mode); }
   }
@@ -1051,7 +1053,7 @@ async function sendMessage(text, retry = false) {
     document.querySelector('.message:last-child')?.scrollIntoView({ block: 'nearest' });
     document.querySelector('#message-input')?.focus({ preventScroll: true });
   }
-  if (state.listen) speak(failure || reply);
+  if (state.listen) speak(failure?.message || reply);
 }
 
 function startVoice(button) {
