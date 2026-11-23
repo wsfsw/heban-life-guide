@@ -29,6 +29,8 @@ import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.TextView;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 public final class ScreenGuideService extends AccessibilityService {
@@ -38,6 +40,10 @@ public final class ScreenGuideService extends AccessibilityService {
     private static final String ENLARGE = "请把字体调大";
     private static final String DONE = "字体已放大";
     private static final String UNKNOWN = "可在设置里搜字体大小";
+    private static final String SEARCH_FONT = "请在设置中搜字体";
+    private static final String TYPE_FONT = "请输入字体";
+    private static final String VIVO_FONT = "请点字体大小与粗细";
+    private static final String VIVO_ADJUST = "请拖动上面的字号滑块";
     private static final String OPEN_SETTINGS = "请打开手机设置";
     private static final String CHANNEL = "heban_guide";
     private static final int NOTIFICATION = 37;
@@ -157,6 +163,9 @@ public final class ScreenGuideService extends AccessibilityService {
     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
         if (!isRunning()) return;
         String eventPackage = Objects.toString(event.getPackageName(), "");
+        if (plan == null && settingsPackage.equals(eventPackage)
+                && (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                    || event.getEventType() == AccessibilityEvent.TYPE_VIEW_SCROLLED)) clearTarget();
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && target != null
                 && (event.getWindowId() != targetWindow || !targetPackage.equals(eventPackage))) clearTarget();
         if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_CLICKED && !keyguard.isKeyguardLocked()
@@ -225,11 +234,14 @@ public final class ScreenGuideService extends AccessibilityService {
             } else {
                 Candidates state = new Candidates();
                 scan(root, null, false, 0, state);
-                if (state.adjust != null) {
+                boolean fontDetail = state.isFontDetail();
+                if (fontDetail) state.selectSizeControl();
+                if (fontDetail || state.adjust != null) {
                     if (rangeIncreased(root.getWindowId(), state)) { finish(DONE); return; }
                     target = null;
-                    setPrompt(ENLARGE);
-                    showGlow(state.adjust);
+                    setPrompt(fontDetail ? VIVO_ADJUST : ENLARGE);
+                    if (state.adjust != null) showGlow(state.adjust);
+                    else dropGlow();
                 } else if (now - tappedAt < 1000) {
                     clearTarget();
                     setPrompt(WAIT);
@@ -237,10 +249,15 @@ public final class ScreenGuideService extends AccessibilityService {
                     Rect candidate = state.font != null ? state.font : state.display;
                     if (candidate != null) {
                         markTarget(candidate, app, root.getWindowId());
-                        setPrompt(state.font != null ? FIND : "请点显示大小和文字");
+                        setPrompt("请点" + (state.font != null ? state.fontName : state.displayName));
+                    } else if (state.search != null && !state.searchFocused) {
+                        target = null;
+                        setPrompt(SEARCH_FONT);
+                        showGlow(state.search);
                     } else {
                         clearTarget();
-                        if (now - started >= 2200) setPrompt(UNKNOWN);
+                        if (state.searchFocused) setPrompt(TYPE_FONT);
+                        else if (now - started >= 2200) setPrompt(UNKNOWN);
                     }
                 }
                 showCaption(prompt);
@@ -425,11 +442,37 @@ public final class ScreenGuideService extends AccessibilityService {
         Rect clickable = node.isClickable() && node.isEnabled() && !bounds.isEmpty() && bounds.height() <= dp(180) ? bounds : row;
         boolean font = FontTargets.font(label) || FontTargets.font(description);
         boolean display = FontTargets.display(label) || FontTargets.display(description);
-        if (clickable != null && font && result.font == null) result.font = clickable;
-        if (clickable != null && display && result.display == null) result.display = clickable;
+        boolean detail = FontTargets.detail(label) || FontTargets.detail(description);
+        if (!bounds.isEmpty()) {
+            if (detail) result.fontDetailTitle = true;
+            if ((FontTargets.sizeHeading(label) || FontTargets.sizeHeading(description))
+                    && (result.sizeTitle == null || bounds.top < result.sizeTitle.top)) result.sizeTitle = bounds;
+            if ((FontTargets.weightHeading(label) || FontTargets.weightHeading(description))
+                    && (result.weightTitle == null || bounds.top < result.weightTitle.top)) result.weightTitle = bounds;
+        }
+        if (clickable != null && font && (result.font == null || detail && !result.fontDetailResult)) {
+            result.font = clickable;
+            result.fontDetailResult = detail;
+            result.fontName = FontTargets.firstLine(FontTargets.font(label) ? label : description);
+        }
+        if (clickable != null && display && result.display == null) {
+            result.display = clickable;
+            result.displayName = FontTargets.firstLine(FontTargets.display(label) ? label : description);
+        }
+        if (FontTargets.settingsSearch(label) || FontTargets.settingsSearch(description) || FontTargets.settingsSearch(node.getHintText())) {
+            if (!node.isPassword() && !bounds.isEmpty() && node.isEnabled() && result.search == null) {
+                result.search = clickable == null && node.isEditable() ? bounds : clickable;
+                result.searchFocused = node.isEditable() && node.isFocused();
+            }
+        }
         boolean adjust = FontTargets.increase(label) || FontTargets.increase(description);
         AccessibilityNodeInfo.RangeInfo range = node.getRangeInfo();
         boolean fontRange = range != null && (font || sizeGroup || FontTargets.fontControl(node.getViewIdResourceName()));
+        String controlClass = Objects.toString(node.getClassName(), "");
+        if (node.isEnabled() && !bounds.isEmpty() && (range != null || controlClass.endsWith("SeekBar"))) {
+            result.sliders.add(new SizedControl(bounds, range == null ? Float.NaN : range.getCurrent(),
+                    Objects.toString(node.getViewIdResourceName(), bounds.toShortString())));
+        }
         if (node.isEnabled() && !bounds.isEmpty() && (fontRange || adjust && node.isClickable())) {
             if (result.adjust == null) result.adjust = bounds;
             if (fontRange && !Float.isFinite(result.range)) {
@@ -467,9 +510,50 @@ public final class ScreenGuideService extends AccessibilityService {
         Rect font;
         Rect display;
         Rect adjust;
+        Rect search;
+        Rect sizeTitle;
+        Rect weightTitle;
+        boolean searchFocused;
+        boolean fontDetailTitle;
+        boolean fontDetailResult;
+        String fontName = "";
+        String displayName = "";
+        final List<SizedControl> sliders = new ArrayList<>();
         int visited;
         float range = Float.NaN;
         String rangeKey = "";
+
+        boolean isFontDetail() {
+            if (sizeTitle == null || weightTitle == null || sizeTitle.bottom >= weightTitle.top) return false;
+            if (fontDetailTitle) return true;
+            for (SizedControl control : sliders) {
+                if (FontTargets.isSizeSlider(control.bounds.centerY(), sizeTitle.bottom, weightTitle.top)) return true;
+            }
+            return false;
+        }
+
+        void selectSizeControl() {
+            SizedControl match = null;
+            for (SizedControl control : sliders) {
+                if (!FontTargets.isSizeSlider(control.bounds.centerY(), sizeTitle.bottom, weightTitle.top)) continue;
+                if (match == null || Float.isFinite(control.value) && !Float.isFinite(match.value)
+                        || Float.isFinite(control.value) == Float.isFinite(match.value) && control.bounds.top < match.bounds.top) match = control;
+            }
+            adjust = match == null ? null : match.bounds;
+            range = match == null ? Float.NaN : match.value;
+            rangeKey = match == null ? "" : match.key;
+        }
+    }
+
+    private static final class SizedControl {
+        final Rect bounds;
+        final float value;
+        final String key;
+        SizedControl(Rect bounds, float value, String key) {
+            this.bounds = bounds;
+            this.value = value;
+            this.key = key;
+        }
     }
 
     private WindowManager.LayoutParams overlay(int width, int height) {
@@ -487,9 +571,9 @@ public final class ScreenGuideService extends AccessibilityService {
             caption.setSingleLine(true);
             caption.setEllipsize(TextUtils.TruncateAt.END);
             caption.setTextSize(18);
-            caption.setTextColor(Color.WHITE);
+            caption.setTextColor(0xff172645);
             caption.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-            caption.setShadowLayer(dp(3), 0, dp(1), Color.BLACK);
+            caption.setShadowLayer(dp(3), 0, dp(1), Color.WHITE);
             caption.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             WindowManager.LayoutParams params = overlay(WindowManager.LayoutParams.MATCH_PARENT, dp(29));
             params.gravity = Gravity.TOP;
@@ -513,6 +597,10 @@ public final class ScreenGuideService extends AccessibilityService {
                 case ENLARGE: file = "adjust"; break;
                 case DONE: file = "done"; break;
                 case UNKNOWN: file = "search"; break;
+                case SEARCH_FONT: file = "vivo-search"; break;
+                case TYPE_FONT: file = "vivo-type"; break;
+                case VIVO_FONT: file = "vivo-result"; break;
+                case VIVO_ADJUST: file = "vivo-adjust"; break;
                 case "请点显示大小和文字": file = "display"; break;
                 default: file = "";
             }

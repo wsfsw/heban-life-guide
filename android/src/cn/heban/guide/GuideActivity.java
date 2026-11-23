@@ -124,7 +124,8 @@ public final class GuideActivity extends Activity {
     private void begin() {
         ScreenGuideService service = ScreenGuideService.connected;
         if (service == null || invalidPlan) { refreshStatus(); return; }
-        Intent intent = new Intent(Settings.ACTION_DISPLAY_SETTINGS);
+        String maker = android.os.Build.MANUFACTURER + " " + android.os.Build.BRAND;
+        Intent intent = new Intent(pendingPlan == null && FontTargets.vivo(maker) ? Settings.ACTION_SETTINGS : Settings.ACTION_DISPLAY_SETTINGS);
         ResolveInfo resolved = getPackageManager().resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY | PackageManager.MATCH_SYSTEM_ONLY);
         ComponentName settings = resolved != null && (resolved.activityInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0
                 ? new ComponentName(resolved.activityInfo.packageName, resolved.activityInfo.name) : null;

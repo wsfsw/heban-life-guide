@@ -55,7 +55,7 @@ public final class MainActivity extends Activity {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setUserAgentString(settings.getUserAgentString() + " HebanAndroid/0.3");
+        settings.setUserAgentString(settings.getUserAgentString() + " HebanAndroid/0.4");
         web.setWebViewClient(new Navigation());
         web.setWebChromeClient(new Media());
         Bundle savedWeb = state == null ? null : state.getBundle("web");
