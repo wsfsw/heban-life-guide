@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { handleApi } from '../api.js';
 import { localStorageBindings } from '../scripts/storage.mjs';
 import assistantWorker from '../scripts/assistant-worker.mjs';
-import { captionLines, phoneTopic } from '../phone-guide.js';
+import { androidGuidePath, captionLines, phoneTopic } from '../phone-guide.js';
 
 const origin = 'https://heban.test';
 const statePath = '/api/state';
@@ -71,7 +71,9 @@ test('phone guidance is an optional assistant reply action with platform-specifi
     const system = request.messages[0].content;
     const response = system.includes('这台是苹果手机')
       ? { title: '微信发照片', steps: ['打开微信。', '点进联系人的聊天。'] }
-      : { answer: '可以从微信聊天里的加号开始。', offerPhoneGuide: request.messages.at(-1).content.includes('微信') };
+      : system.includes('androidApp') ? { title: '微信发照片', androidApp: 'wechat',
+        steps: ['打开微信。', '', '点「相册」。'], targets: ['微信', '跳过', '相册'] }
+        : { answer: '可以从微信聊天里的加号开始。', offerPhoneGuide: request.messages.at(-1).content.includes('微信') };
     return Response.json({ choices: [{ message: { content: JSON.stringify(response) } }] });
   });
   const question = '微信怎么发照片？';
@@ -81,6 +83,13 @@ test('phone guidance is an optional assistant reply action with platform-specifi
   assert.equal((await unrelated.json()).offerPhoneGuide, false);
   const selected = await local('/api/assistant', 'POST', { text: question, phonePlatform: 'iphone' });
   assert.deepEqual((await selected.json()).phoneGuide.steps, ['打开微信。', '点进联系人的聊天。']);
+  const android = await local('/api/assistant', 'POST', { text: question, phonePlatform: 'android' });
+  const path = androidGuidePath((await android.json()).phoneGuide);
+  assert.deepEqual(JSON.parse(new URL('heban-guide://phone/' + path).searchParams.get('plan')), {
+    title: '微信发照片', app: 'wechat',
+    steps: [{ text: '打开微信。', target: '微信' }, { text: '点「相册」。', target: '相册' }],
+  });
+  assert.equal(androidGuidePath({ topic: 'font' }), 'font');
   assert.equal(phoneTopic('怎么放大手机字体？'), 'font');
   assert.equal(phoneTopic('怎么连家里的 Wi-Fi？'), 'wifi');
   assert.equal(phoneTopic('怎么关闭 Wi-Fi？'), '');

@@ -15,6 +15,7 @@ $Output = (Resolve-Path -LiteralPath $Output).Path
 $work = Join-Path ([IO.Path]::GetTempPath()) ('heban-android-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path "$work/classes","$work/dex" -Force | Out-Null
 Copy-Item -LiteralPath "$PSScriptRoot/res","$PSScriptRoot/src" -Destination $work -Recurse
+Copy-Item -LiteralPath "$PSScriptRoot/assets" -Destination $work -Recurse
 Copy-Item -LiteralPath "$PSScriptRoot/AndroidManifest.xml" -Destination "$work/AndroidManifest.xml"
 Copy-Item -LiteralPath $PlatformJar -Destination "$work/android.jar"
 $PlatformJar = "$work/android.jar"
@@ -26,7 +27,7 @@ function BuildStep([string]$Program, [string[]]$Arguments) {
 
 $aapt = Join-Path $BuildTools 'aapt2.exe'
 BuildStep $aapt @('compile','--dir',"$work/res",'-o',"$work/resources.zip")
-BuildStep $aapt @('link','--manifest',"$work/AndroidManifest.xml",'-I',$PlatformJar,'-o',"$work/base.apk","$work/resources.zip")
+BuildStep $aapt @('link','--manifest',"$work/AndroidManifest.xml",'-I',$PlatformJar,'-A',"$work/assets",'-0','mp3','-o',"$work/base.apk","$work/resources.zip")
 $sources = @(Get-ChildItem -LiteralPath "$work/src" -Filter *.java -Recurse | ForEach-Object FullName)
 BuildStep 'javac' (@('--release','8','-encoding','UTF-8','-classpath',$PlatformJar,'-d',"$work/classes") + $sources)
 BuildStep 'jar' @('cf',"$work/classes.jar",'-C',"$work/classes",'.')

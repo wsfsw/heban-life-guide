@@ -472,7 +472,10 @@ function chatScreen(mode) {
 }
 
 function phoneGuideButton(questionId) {
-  return phoneGuide.controls(questionId) || `<button class="button quiet phone-offer" type="button" data-action="open-phone-guide" data-id="${escapeHtml(questionId)}">${icon('sound', 20)}听着一步一步做</button>`;
+  const guide = phoneGuide.controls(questionId);
+  if (guide) return guide;
+  const question = state.messages.ask.find((item) => item.role === 'user' && item.id === questionId)?.text;
+  return `${question ? phoneGuide.directLink(question) : ''}<button class="button quiet phone-offer" type="button" data-action="open-phone-guide" data-id="${escapeHtml(questionId)}">${icon('sound', 20)}听着一步一步做</button>`;
 }
 
 function renderMessage(message) {

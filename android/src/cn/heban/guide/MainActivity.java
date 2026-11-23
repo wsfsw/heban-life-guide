@@ -1,5 +1,6 @@
 package cn.heban.guide;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
@@ -8,78 +9,138 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.View;
 import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 public final class MainActivity extends Activity {
+    private TextView title;
     private TextView status;
     private Button start;
     private Button permission;
+    private Button next;
+    private Button replay;
+    private Button stop;
+    private GuidePlan pendingPlan;
+    private boolean invalidPlan;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        readPlan(getIntent());
+        ScrollView scroll = new ScrollView(this);
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setBackgroundColor(Color.WHITE);
         layout.setPadding(dp(22), dp(24), dp(22), dp(24));
         layout.setOnApplyWindowInsetsListener((view, insets) -> applyInsets(view, insets));
 
-        TextView title = text("放大手机字体", 27);
+        title = text("禾伴屏幕引导", 27);
         layout.addView(title);
-        layout.addView(text("禾伴会在系统设置上方显示一行字，在该点的地方亮一个小光点。请您自己点击。", 18));
-        layout.addView(text("开启辅助功能后，禾伴只在您主动开始引导时识别字体控件，内容留在这台手机。", 16));
+        layout.addView(text("开始后，可以退出禾伴或切换应用。屏幕顶部会显示一行字，找到这一步的按钮时会亮起小光点。", 18));
+        layout.addView(text("请您自己点击。您可以在通知栏或回到禾伴结束引导。", 16));
 
-        permission = new Button(this);
-        permission.setText("去开启禾伴屏幕引导");
-        permission.setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
-        layout.addView(permission);
-
-        start = new Button(this);
-        start.setText("开始引导");
-        start.setOnClickListener(view -> begin());
-        layout.addView(start);
+        permission = add(layout, "去开启禾伴屏幕引导", () -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        start = add(layout, "开始跨应用引导", this::confirmStart);
+        replay = add(layout, "再听这一步", () -> { if (ScreenGuideService.connected != null) ScreenGuideService.connected.replay(); });
+        next = add(layout, "我做完了，下一步", () -> {
+            if (ScreenGuideService.connected != null) ScreenGuideService.connected.next();
+            refreshStatus();
+        });
+        stop = add(layout, "结束引导", () -> {
+            if (ScreenGuideService.connected != null) ScreenGuideService.connected.end();
+            refreshStatus();
+        });
 
         status = text("", 16);
         layout.addView(status);
-        setContentView(layout);
+        scroll.addView(layout);
+        setContentView(scroll);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        readPlan(intent);
+        refreshStatus();
+    }
+
+    private void readPlan(Intent intent) {
+        Uri uri = intent == null ? null : intent.getData();
+        invalidPlan = false;
+        pendingPlan = null;
+        if (uri != null && "heban-guide".equals(uri.getScheme()) && "phone".equals(uri.getHost()) && "/steps".equals(uri.getPath())) {
+            pendingPlan = GuidePlan.parse(uri.getQueryParameter("plan"));
+            invalidPlan = pendingPlan == null;
+        }
     }
 
     @Override protected void onResume() {
         super.onResume();
-        ScreenGuideService service = ScreenGuideService.connected;
-        if (service != null) service.end();
         refreshStatus();
-        if (service == null) start.postDelayed(this::refreshStatus, 500);
+        start.postDelayed(this::refreshStatus, 500);
     }
 
     private void refreshStatus() {
         ScreenGuideService service = ScreenGuideService.connected;
-        start.setEnabled(service != null);
+        boolean running = service != null && service.isRunning();
+        title.setText(pendingPlan == null ? "放大手机字体" : pendingPlan.title);
+        start.setEnabled(service != null && !invalidPlan);
+        start.setText(running ? "重新开始这项引导" : "开始跨应用引导");
         permission.setVisibility(service == null ? View.VISIBLE : View.GONE);
-        status.setText(service == null ? "请先开启辅助功能里的「禾伴屏幕引导」。" : "");
+        replay.setVisibility(running ? View.VISIBLE : View.GONE);
+        next.setVisibility(running && service.hasPlan() ? View.VISIBLE : View.GONE);
+        stop.setVisibility(running ? View.VISIBLE : View.GONE);
+        status.setText(invalidPlan ? "没有读到这次的步骤。请从禾伴助手再次打开。"
+                : running ? service.currentPrompt() : service == null ? "请先开启辅助功能里的「禾伴屏幕引导」。" : "");
+    }
+
+    private void confirmStart() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                && !getPreferences(MODE_PRIVATE).getBoolean("askedForNotifications", false)) {
+            getPreferences(MODE_PRIVATE).edit().putBoolean("askedForNotifications", true).apply();
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
+        } else begin();
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == 1 && results.length > 0) begin();
     }
 
     private void begin() {
         ScreenGuideService service = ScreenGuideService.connected;
-        if (service == null) { status.setText("请先开启禾伴屏幕引导。"); return; }
+        if (service == null || invalidPlan) { refreshStatus(); return; }
         Intent intent = new Intent(Settings.ACTION_DISPLAY_SETTINGS);
         ResolveInfo resolved = getPackageManager().resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY | PackageManager.MATCH_SYSTEM_ONLY);
         ComponentName settings = resolved != null && (resolved.activityInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0
                 ? new ComponentName(resolved.activityInfo.packageName, resolved.activityInfo.name) : null;
-        if (settings == null) { status.setText("这台手机暂时找不到显示设置入口。"); return; }
-        intent.setComponent(settings);
-        try {
-            service.begin(settings.getPackageName());
-            startActivity(intent);
-        } catch (ActivityNotFoundException | SecurityException failure) {
-            service.end();
-            status.setText("没能打开系统的显示设置。");
+        String settingsPackage = settings == null ? "com.android.settings" : settings.getPackageName();
+        service.begin(settingsPackage, pendingPlan);
+        if (pendingPlan == null && settings != null) {
+            try {
+                startActivity(intent.setComponent(settings));
+            } catch (ActivityNotFoundException | SecurityException failure) {
+                status.setText("请手动打开手机设置。");
+            }
+        } else {
+            moveTaskToBack(true);
         }
+        refreshStatus();
+    }
+
+    private Button add(LinearLayout layout, String label, Runnable action) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setOnClickListener(view -> action.run());
+        layout.addView(button);
+        return button;
     }
 
     private TextView text(String value, int size) {
