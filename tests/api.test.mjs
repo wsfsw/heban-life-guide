@@ -72,7 +72,7 @@ test('phone guidance is an optional assistant reply action with platform-specifi
     const response = system.includes('这台是苹果手机')
       ? { title: '微信发照片', steps: ['打开微信。', '点进联系人的聊天。'] }
       : system.includes('androidApp') ? { title: '微信发照片', androidApp: 'wechat',
-        steps: ['打开微信。', '', '点「相册」。'], targets: ['微信', '跳过', '相册'] }
+        steps: ['打开微信。', '', '点「相册」。'], targets: ['微信', '跳过', '相册'], after: ['', '跳过', '选择照片'] }
         : { answer: '可以从微信聊天里的加号开始。', offerPhoneGuide: request.messages.at(-1).content.includes('微信') };
     return Response.json({ choices: [{ message: { content: JSON.stringify(response) } }] });
   });
@@ -87,7 +87,7 @@ test('phone guidance is an optional assistant reply action with platform-specifi
   const path = androidGuidePath((await android.json()).phoneGuide);
   assert.deepEqual(JSON.parse(new URL('heban-guide://phone/' + path).searchParams.get('plan')), {
     title: '微信发照片', app: 'wechat',
-    steps: [{ text: '打开微信。', target: '微信' }, { text: '点「相册」。', target: '相册' }],
+    steps: [{ text: '打开微信。', target: '微信' }, { text: '点「相册」。', target: '相册', after: '选择照片' }],
   });
   assert.equal(androidGuidePath({ topic: 'font' }), 'font');
   const inferred = androidGuidePath({ androidApp: 'wechat', steps: [

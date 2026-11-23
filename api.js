@@ -149,7 +149,7 @@ export async function assistantRoute(request, url, env) {
     const tone = { '小禾': '温和', '小松': '简洁', '暖暖': '亲切' };
     const format = photo ? imagePrompt : phoneMode
       ? phonePrompt + (phonePlatform === 'iphone' ? '这台是苹果手机（iPhone）。'
-        : '这台是安卓手机，品牌和系统版本可能不同。androidApp 是主要应用，可用 settings（系统设置）、wechat、qq、maps、browser、确定的安卓包名或空字符串。步骤进入别的应用时，用 apps 与 steps 对齐列出对应应用，其余留空。targets 与 steps 等长，每项写这一步明确要点的一个按钮的原文。无法确定按钮、需要输入、付款或发送时用空字符串；按钮名字请原样写进步骤。')
+        : '这台是安卓手机，品牌和系统版本可能不同。androidApp 是主要应用，可用 settings（系统设置）、wechat、qq、maps、browser、确定的安卓包名或空字符串。步骤进入别的应用时，用 apps 与 steps 对齐列出对应应用。targets 与 steps 等长，每项写这一步明确要点的一个按钮的原文；无法确定按钮、需要输入、付款或发送时留空。按钮名字请原样写进步骤。可选 after 与 steps 等长，填同一个应用内只有这一步成功后才会出现的准确界面标题或提示；不确定或标题已出现在当前页时留空。')
       : '回复风格：' + (Object.hasOwn(tone, style) ? tone[style] : '温和') + '。';
     const system = assistantPrompt + format + (suggest ? '。只输出 JSON 对象。范例：{"answer":"您好，请问您想办什么事？","offerPhoneGuide":false}。想在手机上操作设置或 App（例如调字体、用微信发图）时设为 true。设备操作、生活闲聊、知识解释设为 false。' : '');
     const content = photo ? [
@@ -179,7 +179,8 @@ export async function assistantRoute(request, url, env) {
         const step = lines(item, 85);
         const label = Array.isArray(parsed.targets) ? lines(parsed.targets[index], 28) : '';
         const app = Array.isArray(parsed.apps) ? androidScope(parsed.apps[index]) : '';
-        return step ? [{ step, target: label && step.includes(label) ? label : '', app }] : [];
+        const after = Array.isArray(parsed.after) ? lines(parsed.after[index], 28) : '';
+        return step ? [{ step, target: label && step.includes(label) ? label : '', app, after }] : [];
       });
       const steps = pairs.map(({ step }) => step);
       const clarification = lines(parsed?.clarification, 100);
@@ -188,6 +189,7 @@ export async function assistantRoute(request, url, env) {
         androidApp: androidScope(parsed.androidApp),
         targets: pairs.map(({ target }) => target),
         apps: pairs.map(({ app }) => app),
+        after: pairs.map(({ after }) => after),
       } : {};
       return json({ phoneGuide: { title: lines(parsed?.title, 24) || '手机操作步骤', steps, clarification, ...android } }, 200, cors);
     }

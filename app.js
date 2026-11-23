@@ -475,7 +475,7 @@ function phoneGuideButton(questionId) {
   if (!question) return '';
   const guide = phoneGuide.controls(questionId);
   if (guide) return guide;
-  return `${phoneGuide.directLink(question.text)}<button class="button quiet phone-offer" type="button" data-action="open-phone-guide" data-id="${escapeHtml(questionId)}">${icon('sound', 20)}听着一步一步做</button>`;
+  return `${phoneGuide.directLink(question.text, questionId)}<button class="button quiet phone-offer" type="button" data-action="open-phone-guide" data-id="${escapeHtml(questionId)}">${icon('sound', 20)}听着一步一步做</button>`;
 }
 
 function renderChatMessages(messages, mode) {
@@ -1693,6 +1693,7 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', records.stopCamera);
 window.addEventListener('pagehide', electricity.stopMedia);
 window.addEventListener('pagehide', phoneGuide.close);
+window.addEventListener('heban-guide-result', (event) => phoneGuide.applyNativeResult(event.detail));
 window.addEventListener('pageshow', (event) => {
   if (event.persisted && route === 'capture') void records.action('capture-reset');
 });

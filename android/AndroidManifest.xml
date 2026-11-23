@@ -1,11 +1,16 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cn.heban.guide" android:versionCode="2" android:versionName="0.2">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cn.heban.guide" android:versionCode="3" android:versionName="0.3">
   <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.CAMERA" />
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <uses-feature android:name="android.hardware.camera" android:required="false" />
+  <uses-feature android:name="android.hardware.microphone" android:required="false" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <queries>
     <intent><action android:name="android.settings.DISPLAY_SETTINGS" /></intent>
     <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
   </queries>
-  <application android:label="禾伴屏幕引导" android:allowBackup="false" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+  <application android:label="禾伴" android:allowBackup="false" android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.Light.NoActionBar">
     <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
@@ -24,6 +29,7 @@
         <data android:scheme="heban-guide" android:host="phone" android:path="/steps" />
       </intent-filter>
     </activity>
+    <activity android:name=".GuideActivity" android:exported="false" />
     <receiver android:name=".GuideControls" android:exported="false" />
     <service android:name=".ScreenGuideService" android:exported="true"
       android:label="禾伴屏幕引导" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

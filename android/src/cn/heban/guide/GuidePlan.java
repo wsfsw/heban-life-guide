@@ -22,12 +22,15 @@ final class GuidePlan {
         final String text;
         final String target;
         final String app;
+        final String after;
 
-        Step(String text, String target, String app) {
+        Step(String text, String target, String app, String after) {
             this.text = text;
             this.target = target.length() <= 28 && !SENSITIVE.matcher(target).find()
                     ? FontTargets.normalize(target) : "";
             this.app = app;
+            String marker = after.length() <= 28 && !SENSITIVE.matcher(after).find() ? FontTargets.normalize(after) : "";
+            this.after = this.target.equals(marker) ? "" : marker;
         }
 
         boolean matches(CharSequence label) {
@@ -53,7 +56,7 @@ final class GuidePlan {
                 if (step == null) return null;
                 String text = step.optString("text").trim();
                 if (text.isEmpty() || text.length() > 85 || text.matches("(?s).*\\p{Cntrl}.*")) return null;
-                output.add(new Step(text, step.optString("target", ""), step.optString("app", "")));
+                output.add(new Step(text, step.optString("target", ""), step.optString("app", ""), step.optString("after", "")));
             }
             String title = input.optString("title", "手机操作引导").trim();
             if (title.isEmpty() || title.length() > 24 || title.matches("(?s).*\\p{Cntrl}.*")) title = "手机操作引导";

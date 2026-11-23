@@ -7,7 +7,9 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.content.res.AssetFileDescriptor;
+import android.database.ContentObserver;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
@@ -45,10 +47,15 @@ public final class ScreenGuideService extends AccessibilityService {
     private final Runnable update = this::inspectSoon;
     private String settingsPackage;
     private float initialFont;
+    private float initialConfigFont;
     private long started;
     private long tappedAt;
     private boolean finished;
     private GuidePlan plan;
+    private StepEvidence evidence = new StepEvidence();
+    private String sessionRef = "";
+    private String resultRef = "";
+    private String resultStatus = "";
     private int stepIndex;
     private String prompt = OPEN_SETTINGS;
     private Rect target;
@@ -56,6 +63,9 @@ public final class ScreenGuideService extends AccessibilityService {
     private int targetWindow;
     private long targetSince;
     private long advanceAt;
+    private CapturedTarget recentTarget;
+    private float initialRange = Float.NaN;
+    private String currentRangeKey = "";
     private WindowManager windows;
     private KeyguardManager keyguard;
     private NotificationManager notifications;
@@ -65,6 +75,9 @@ public final class ScreenGuideService extends AccessibilityService {
     private MediaPlayer recording;
     private boolean speechReady;
     private String lastUttered = "";
+    private final ContentObserver fontObserver = new ContentObserver(handler) {
+        @Override public void onChange(boolean selfChange) { inspectSoon(); }
+    };
 
     @Override protected void onServiceConnected() {
         super.onServiceConnected();
@@ -73,6 +86,7 @@ public final class ScreenGuideService extends AccessibilityService {
         keyguard = getSystemService(KeyguardManager.class);
         notifications = getSystemService(NotificationManager.class);
         notifications.createNotificationChannel(new NotificationChannel(CHANNEL, "禾伴屏幕引导", NotificationManager.IMPORTANCE_LOW));
+        getContentResolver().registerContentObserver(Settings.System.getUriFor(Settings.System.FONT_SCALE), false, fontObserver);
         speech = new TextToSpeech(this, status -> {
             if (status != TextToSpeech.SUCCESS || speech == null || speech.getVoices() == null) return;
             Voice mandarin = speech.getVoices().stream().filter(voice -> ("zh".equals(voice.getLocale().getLanguage())
@@ -82,21 +96,38 @@ public final class ScreenGuideService extends AccessibilityService {
         });
     }
 
-    void begin(String packageName, GuidePlan instructions) {
+    void begin(String packageName, GuidePlan instructions, String ref) {
         end();
         settingsPackage = packageName;
         plan = instructions;
+        sessionRef = ref;
+        resultRef = ref;
+        resultStatus = "running";
+        if (ref.equals(getSharedPreferences("guide_result", MODE_PRIVATE).getString("ref", ""))) {
+            getSharedPreferences("guide_result", MODE_PRIVATE).edit().remove("ref").apply();
+        }
         stepIndex = 0;
         prompt = plan == null ? OPEN_SETTINGS : plan.steps.get(0).text;
-        initialFont = Settings.System.getFloat(getContentResolver(), Settings.System.FONT_SCALE, getResources().getConfiguration().fontScale);
+        initialConfigFont = getResources().getConfiguration().fontScale;
+        initialFont = Settings.System.getFloat(getContentResolver(), Settings.System.FONT_SCALE, Float.NaN);
         started = SystemClock.elapsedRealtime();
         publishNotification();
         inspectSoon();
     }
 
     boolean isRunning() { return settingsPackage != null && !finished; }
-    boolean hasPlan() { return plan != null; }
-    String currentPrompt() { return prompt; }
+    boolean isLastStep() { return plan == null || stepIndex == plan.steps.size() - 1; }
+    String resultRef() { return resultRef; }
+    String resultStatus() { return resultStatus; }
+    String displayStatus(String ref) {
+        if (isRunning()) return prompt;
+        return "completed".equals(resultStatus) && (ref.isEmpty() || resultRef.equals(ref)) ? prompt : "";
+    }
+
+    @Override public void onConfigurationChanged(Configuration config) {
+        super.onConfigurationChanged(config);
+        inspectSoon();
+    }
 
     void replay() {
         if (!isRunning()) return;
@@ -105,10 +136,18 @@ public final class ScreenGuideService extends AccessibilityService {
         if (caption != null) announce(prompt);
     }
 
-    void next() {
+    void confirmCurrent() {
+        if (!isRunning()) return;
+        if (plan == null) finish("已确认完成");
+        else next();
+    }
+
+    private void next() {
         if (!isRunning() || plan == null) return;
         advanceAt = SystemClock.uptimeMillis() + 220;
         clearTarget();
+        recentTarget = null;
+        evidence = new StepEvidence();
         stepIndex++;
         if (stepIndex >= plan.steps.size()) { finish("这次引导已完成"); return; }
         setPrompt(plan.steps.get(stepIndex).text);
@@ -120,27 +159,38 @@ public final class ScreenGuideService extends AccessibilityService {
         String eventPackage = Objects.toString(event.getPackageName(), "");
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && target != null
                 && (event.getWindowId() != targetWindow || !targetPackage.equals(eventPackage))) clearTarget();
-        if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_CLICKED && target != null && !keyguard.isKeyguardLocked()
-                && targetPackage.equals(eventPackage) && event.getWindowId() == targetWindow && event.getEventTime() >= targetSince) {
-            AccessibilityNodeInfo source = event.getSource();
-            if (source != null) {
-                try {
-                    Rect bounds = new Rect();
-                    source.getBoundsInScreen(bounds);
-                    int x = bounds.centerX();
-                    int y = bounds.centerY();
-                    if (!source.isPassword() && !source.isEditable() && !bounds.isEmpty() && target.contains(x, y)
-                            && bounds.width() <= target.width() && bounds.height() <= target.height()) {
-                        if (plan != null) { next(); return; }
-                        tappedAt = SystemClock.elapsedRealtime();
-                        clearTarget();
-                        setPrompt(WAIT);
-                    }
-                } finally { source.recycle(); }
-            }
+        if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_CLICKED && !keyguard.isKeyguardLocked()
+                && !GuidePlan.protectedPackage(eventPackage) && confirmsClick(event, eventPackage)) {
+            if (plan != null) { next(); return; }
+            tappedAt = SystemClock.elapsedRealtime();
+            clearTarget();
+            recentTarget = null;
+            setPrompt(WAIT);
         }
         handler.removeCallbacks(update);
         handler.postDelayed(update, 90);
+    }
+
+    private boolean confirmsClick(AccessibilityEvent event, String app) {
+        long at = event.getEventTime();
+        Rect bounds = target != null && targetPackage.equals(app) && event.getWindowId() == targetWindow && at >= targetSince
+                ? target : recentTarget != null && recentTarget.applies(app, event.getWindowId(), at) ? recentTarget.bounds : null;
+        if (bounds == null) return false;
+        AccessibilityNodeInfo source = event.getSource();
+        if (source != null) {
+            try {
+                if (source.isPassword() || source.isEditable()) return false;
+                Rect clicked = new Rect();
+                source.getBoundsInScreen(clicked);
+                if (!clicked.isEmpty() && bounds.contains(clicked.centerX(), clicked.centerY())
+                        && clicked.width() <= bounds.width() && clicked.height() <= bounds.height()) return true;
+            } finally { source.recycle(); }
+        }
+        if (plan == null) return false;
+        GuidePlan.Step step = plan.steps.get(stepIndex);
+        if (step.matches(event.getContentDescription())) return true;
+        for (CharSequence label : event.getText()) if (step.matches(label)) return true;
+        return false;
     }
 
     private void inspectSoon() {
@@ -156,12 +206,18 @@ public final class ScreenGuideService extends AccessibilityService {
             String app = root == null ? "" : Objects.toString(root.getPackageName(), "");
             if (keyguard.isKeyguardLocked() || GuidePlan.protectedPackage(app) || passwordFocused(root)) {
                 clearTarget();
+                recentTarget = null;
                 clearOverlays();
                 lastUttered = "";
                 stopAudio();
             } else if (plan != null) {
                 inspectPlan(root, app);
                 showCaption(prompt);
+            } else if (StepEvidence.fontChanged(initialFont,
+                    Settings.System.getFloat(getContentResolver(), Settings.System.FONT_SCALE, Float.NaN),
+                    initialConfigFont, getResources().getConfiguration().fontScale)) {
+                finish(DONE);
+                return;
             } else if (!settingsPackage.equals(app)) {
                 clearTarget();
                 setPrompt(OPEN_SETTINGS);
@@ -169,11 +225,8 @@ public final class ScreenGuideService extends AccessibilityService {
             } else {
                 Candidates state = new Candidates();
                 scan(root, null, false, 0, state);
-                float fontScale = Settings.System.getFloat(getContentResolver(), Settings.System.FONT_SCALE, initialFont);
-                if (FontTargets.enlarged(initialFont, fontScale)) {
-                    finish(DONE); return;
-                }
                 if (state.adjust != null) {
+                    if (rangeIncreased(root.getWindowId(), state)) { finish(DONE); return; }
                     target = null;
                     setPrompt(ENLARGE);
                     showGlow(state.adjust);
@@ -197,6 +250,17 @@ public final class ScreenGuideService extends AccessibilityService {
         handler.postDelayed(poll, 600);
     }
 
+    private boolean rangeIncreased(int windowId, Candidates candidates) {
+        if (!Float.isFinite(candidates.range)) return false;
+        String key = windowId + ":" + candidates.rangeKey;
+        if (!key.equals(currentRangeKey)) {
+            currentRangeKey = key;
+            initialRange = candidates.range;
+            return false;
+        }
+        return FontTargets.enlarged(initialRange, candidates.range);
+    }
+
     private boolean passwordFocused(AccessibilityNodeInfo root) {
         if (root == null) return false;
         AccessibilityNodeInfo focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
@@ -207,45 +271,99 @@ public final class ScreenGuideService extends AccessibilityService {
 
     private void inspectPlan(AccessibilityNodeInfo root, String app) {
         GuidePlan.Step step = plan.steps.get(stepIndex);
-        if (root == null || !plan.containsApp(step, app, settingsPackage)
-                || SystemClock.uptimeMillis() < advanceAt) { clearTarget(); return; }
-        if (plan.opensApp(step)) {
+        if (root == null || SystemClock.uptimeMillis() < advanceAt) { clearTarget(); return; }
+        boolean inScope = plan.containsApp(step, app, settingsPackage);
+        if (inScope && plan.opensApp(step)) {
             next();
             return;
         }
-        if (step.target.isEmpty()) { clearTarget(); return; }
-        Match match = new Match();
-        findTarget(root, null, step, 0, match);
-        if (match.ambiguous || match.bounds == null) clearTarget();
+        Match match = inScope ? findTarget(root, step.target) : new Match();
+        GuidePlan.Step nextStep = isLastStep() ? null : plan.steps.get(stepIndex + 1);
+        boolean nextVisible = nextStep != null && plan.containsApp(nextStep, app, settingsPackage)
+                && !step.target.equals(nextStep.target) && findTarget(root, nextStep.target).found();
+        boolean afterVisible = inScope && !step.after.isEmpty() && visibleLabel(root, step.after, 0, new int[]{0});
+        if (evidence.observe(inScope, match.found(), match.selected, afterVisible, nextVisible)) {
+            next();
+            return;
+        }
+        if (!match.found()) clearTarget();
         else markTarget(match.bounds, app, root.getWindowId());
     }
 
-    private void findTarget(AccessibilityNodeInfo node, Rect row, GuidePlan.Step step, int depth, Match result) {
+    private Match findTarget(AccessibilityNodeInfo root, String label) {
+        Match match = new Match();
+        if (!label.isEmpty()) findTarget(root, null, false, label, 0, match);
+        return match;
+    }
+
+    private void findTarget(AccessibilityNodeInfo node, Rect row, boolean rowSelected, String label, int depth, Match result) {
         if (depth > 22 || result.visited++ >= 500 || result.ambiguous || !node.isVisibleToUser()
                 || node.isPassword() || node.isEditable()) return;
         Rect bounds = new Rect();
         node.getBoundsInScreen(bounds);
-        Rect candidate = node.isClickable() && node.isEnabled() && !bounds.isEmpty() && bounds.height() <= dp(180) ? bounds : row;
-        if (candidate != null && (step.matches(node.getText()) || step.matches(node.getContentDescription()))) {
+        boolean clickable = node.isClickable() && node.isEnabled() && !bounds.isEmpty() && bounds.height() <= dp(180);
+        Rect candidate = clickable ? bounds : row;
+        boolean selected = node.isSelected() || (!clickable && rowSelected);
+        if (candidate != null && labelMatches(node, label)) {
             if (result.bounds == null) result.bounds = candidate;
             else if (!result.bounds.equals(candidate)) result.ambiguous = true;
+            result.selected |= selected;
         }
         for (int i = 0; i < node.getChildCount() && result.visited < 500 && !result.ambiguous; i++) {
             AccessibilityNodeInfo child = node.getChild(i);
             if (child == null) continue;
-            try { findTarget(child, candidate, step, depth + 1, result); }
+            try { findTarget(child, candidate, selected, label, depth + 1, result); }
             finally { child.recycle(); }
         }
+    }
+
+    private boolean visibleLabel(AccessibilityNodeInfo node, String label, int depth, int[] visited) {
+        if (depth > 22 || visited[0]++ >= 500 || !node.isVisibleToUser() || node.isEditable() || node.isPassword()) return false;
+        if (labelMatches(node, label)) return true;
+        for (int i = 0; i < node.getChildCount() && visited[0] < 500; i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try { if (visibleLabel(child, label, depth + 1, visited)) return true; }
+            finally { child.recycle(); }
+        }
+        return false;
+    }
+
+    private boolean labelMatches(AccessibilityNodeInfo node, String label) {
+        return label.equals(FontTargets.normalize(node.getText())) || label.equals(FontTargets.normalize(node.getContentDescription()));
     }
 
     private static final class Match {
         int visited;
         Rect bounds;
         boolean ambiguous;
+        boolean selected;
+        boolean found() { return !ambiguous && bounds != null; }
+    }
+
+    private static final class CapturedTarget {
+        final Rect bounds;
+        final String app;
+        final int window;
+        final long from;
+        final long until = SystemClock.uptimeMillis();
+
+        CapturedTarget(Rect bounds, String app, int window, long from) {
+            this.bounds = bounds;
+            this.app = app;
+            this.window = window;
+            this.from = from;
+        }
+
+        boolean applies(String eventApp, int eventWindow, long at) {
+            return window == eventWindow && app.equals(eventApp) && at >= from && at <= until
+                    && SystemClock.uptimeMillis() - until <= 1500;
+        }
     }
 
     private void markTarget(Rect bounds, String app, int window) {
         if (!bounds.equals(target) || !app.equals(targetPackage) || window != targetWindow) {
+            if (target != null) recentTarget = new CapturedTarget(target, targetPackage, targetWindow, targetSince);
             targetSince = SystemClock.uptimeMillis();
         }
         target = bounds;
@@ -255,6 +373,7 @@ public final class ScreenGuideService extends AccessibilityService {
     }
 
     private void clearTarget() {
+        if (target != null) recentTarget = new CapturedTarget(target, targetPackage, targetWindow, targetSince);
         target = null;
         targetPackage = "";
         dropGlow();
@@ -262,6 +381,9 @@ public final class ScreenGuideService extends AccessibilityService {
 
     private void finish(String message) {
         finished = true;
+        resultRef = sessionRef;
+        resultStatus = "completed";
+        if (!resultRef.isEmpty()) getSharedPreferences("guide_result", MODE_PRIVATE).edit().putString("ref", resultRef).apply();
         clearTarget();
         setPrompt(message);
         if (!keyguard.isKeyguardLocked() && caption != null) showCaption(message);
@@ -278,13 +400,13 @@ public final class ScreenGuideService extends AccessibilityService {
     private void publishNotification() {
         if (!notifications.areNotificationsEnabled()) return;
         PendingIntent openApp = PendingIntent.getActivity(this, 0,
-                new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                new Intent(this, GuideActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification.Builder notification = new Notification.Builder(this, CHANNEL)
                 .setContentTitle("禾伴屏幕引导").setContentText(prompt).setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(openApp).setVisibility(Notification.VISIBILITY_SECRET).setOngoing(true).setOnlyAlertOnce(true)
                 .addAction(notificationAction("重听", "REPLAY", 1));
-        if (plan != null && !finished) notification.addAction(notificationAction("下一步", "NEXT", 2));
+        if (!finished) notification.addAction(notificationAction(isLastStep() ? "我已完成" : "下一步", "NEXT", 2));
         notifications.notify(NOTIFICATION, notification.addAction(notificationAction("结束", "STOP", 3)).build());
     }
 
@@ -306,9 +428,15 @@ public final class ScreenGuideService extends AccessibilityService {
         if (clickable != null && font && result.font == null) result.font = clickable;
         if (clickable != null && display && result.display == null) result.display = clickable;
         boolean adjust = FontTargets.increase(label) || FontTargets.increase(description);
-        if (result.adjust == null && node.isEnabled() && !bounds.isEmpty()
-                && ((node.getRangeInfo() != null && (font || sizeGroup || FontTargets.fontControl(node.getViewIdResourceName())))
-                        || (adjust && node.isClickable()))) result.adjust = bounds;
+        AccessibilityNodeInfo.RangeInfo range = node.getRangeInfo();
+        boolean fontRange = range != null && (font || sizeGroup || FontTargets.fontControl(node.getViewIdResourceName()));
+        if (node.isEnabled() && !bounds.isEmpty() && (fontRange || adjust && node.isClickable())) {
+            if (result.adjust == null) result.adjust = bounds;
+            if (fontRange && !Float.isFinite(result.range)) {
+                result.range = range.getCurrent();
+                result.rangeKey = Objects.toString(node.getViewIdResourceName(), bounds.toShortString());
+            }
+        }
         boolean labelledGroup = sizeGroup || font || hasFontLabel(node);
         for (int i = 0; i < node.getChildCount() && result.visited < 500; i++) {
             AccessibilityNodeInfo child = node.getChild(i);
@@ -340,6 +468,8 @@ public final class ScreenGuideService extends AccessibilityService {
         Rect display;
         Rect adjust;
         int visited;
+        float range = Float.NaN;
+        String rangeKey = "";
     }
 
     private WindowManager.LayoutParams overlay(int width, int height) {
@@ -449,12 +579,18 @@ public final class ScreenGuideService extends AccessibilityService {
     }
 
     void end() {
+        if (isRunning()) { resultRef = sessionRef; resultStatus = "ended"; }
         settingsPackage = null;
         plan = null;
+        sessionRef = "";
         finished = false;
         target = null;
+        recentTarget = null;
         targetPackage = "";
         tappedAt = advanceAt = 0;
+        initialRange = Float.NaN;
+        currentRangeKey = "";
+        evidence = new StepEvidence();
         lastUttered = "";
         handler.removeCallbacksAndMessages(null);
         clearOverlays();
@@ -467,6 +603,7 @@ public final class ScreenGuideService extends AccessibilityService {
     @Override public void onDestroy() {
         if (connected == this) connected = null;
         end();
+        getContentResolver().unregisterContentObserver(fontObserver);
         if (speech != null) speech.shutdown();
         super.onDestroy();
     }
