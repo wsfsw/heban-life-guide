@@ -1,0 +1,26 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cn.heban.guide" android:versionCode="1" android:versionName="0.1">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+  <queries>
+    <intent><action android:name="android.settings.DISPLAY_SETTINGS" /></intent>
+    <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
+  </queries>
+  <application android:label="禾伴屏幕引导" android:allowBackup="false" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+    <activity android:name=".MainActivity" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="heban-guide" android:host="phone" android:path="/font" />
+      </intent-filter>
+    </activity>
+    <service android:name=".ScreenGuideService" android:exported="true"
+      android:label="禾伴屏幕引导" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+      <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+      <meta-data android:name="android.accessibilityservice" android:resource="@xml/screen_guide" />
+    </service>
+  </application>
+</manifest>

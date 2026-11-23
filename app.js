@@ -54,8 +54,8 @@ const icon = (name, size = 24) => `<svg width="${size}" height="${size}" viewBox
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const records = createRecords({ paint: render, pageHeader, escapeHtml, icon, showDialog, closeDialog: () => dialog.close(), notify, isGuest: () => account?.guest });
 const electricity = createElectricityCards({ api, escapeHtml, pageHeader, loginAction, render, speak, stopSpeech, account: () => account, family: () => family });
-const phoneGuide = createPhoneGuide({ dialog, showDialog, api: askAssistant, esc: escapeHtml,
-  speak: (text, status) => speak(text, state.speechRate, true, status), stopSpeech, getAccount: () => account });
+const phoneGuide = createPhoneGuide({ caption: document.querySelector('#phone-caption'), api: askAssistant, esc: escapeHtml, render,
+  speak: (text, status) => speak(text, state.speechRate, true, status), stopSpeech });
 
 let state = newState();
 let route = readRoute();
@@ -472,7 +472,7 @@ function chatScreen(mode) {
 }
 
 function phoneGuideButton(questionId) {
-  return `<button class="button quiet phone-offer" type="button" data-action="open-phone-guide" data-id="${escapeHtml(questionId)}">${icon('sound', 20)}听着一步一步做</button>`;
+  return phoneGuide.controls(questionId) || `<button class="button quiet phone-offer" type="button" data-action="open-phone-guide" data-id="${escapeHtml(questionId)}">${icon('sound', 20)}听着一步一步做</button>`;
 }
 
 function renderMessage(message) {
@@ -1613,7 +1613,6 @@ document.addEventListener('keydown', (event) => {
 });
 
 dialog.addEventListener('close', () => {
-  if (!dialog.open) phoneGuide.close();
   if (returnFocus?.isConnected) returnFocus.focus();
   returnFocus = null;
 });
@@ -1654,6 +1653,7 @@ function enterScreen(focus = false) {
 window.addEventListener('hashchange', () => {
   if (dialog.open) dialog.close();
   recognition?.abort();
+  phoneGuide.close();
   stopSpeech();
   route = readRoute();
   if (!cloudSite && location.hash === '#/legacy' && !authBusy) { void boot(); return; }

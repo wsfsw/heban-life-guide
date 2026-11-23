@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { handleApi } from '../api.js';
 import { localStorageBindings } from '../scripts/storage.mjs';
 import assistantWorker from '../scripts/assistant-worker.mjs';
-import { phoneTopic } from '../phone-guide.js';
+import { captionLines, phoneTopic } from '../phone-guide.js';
 
 const origin = 'https://heban.test';
 const statePath = '/api/state';
@@ -84,6 +84,9 @@ test('phone guidance is an optional assistant reply action with platform-specifi
   assert.equal(phoneTopic('怎么放大手机字体？'), 'font');
   assert.equal(phoneTopic('怎么连家里的 Wi-Fi？'), 'wifi');
   assert.equal(phoneTopic('怎么关闭 Wi-Fi？'), '');
+  const instruction = '在设置里搜索“字体大小”，点开对应的结果。';
+  assert.equal(captionLines(instruction).join(''), instruction);
+  assert.ok(captionLines(instruction).every((line) => Array.from(line).length <= 13));
 });
 
 test('assistant distinguishes a shared network limit from the site-wide limit', async (t) => {
