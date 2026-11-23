@@ -40,6 +40,11 @@ async function buildAssets() {
     'phone-guide.js': 'text/javascript; charset=utf-8',
   };
   const assets = Object.fromEntries(await Promise.all(Object.entries(types).map(async ([file, type]) => [`/${file}`, { type, body: await read(file) }])));
+  assets['/heban-screen-guide.apk'] = {
+    type: 'application/vnd.android.package-archive',
+    encoded: (await readFile(new URL('assets/heban-screen-guide.apk', root))).toString('base64'),
+    attachment: 'Heban.apk',
+  };
   for (const file of ['guide-kit.webp', 'voice-card.webp']) {
     const path = 'assets/' + file;
     assets['/' + path] = { type: 'image/webp', encoded: (await readFile(new URL(path, root))).toString('base64') };
@@ -114,6 +119,7 @@ export default {
       'Referrer-Policy': 'same-origin',
       'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
     };
+    if (asset.attachment) headers['Content-Disposition'] = 'attachment; filename="' + asset.attachment + '"';
     const body = request.method === 'HEAD' ? null
       : asset.encoded ? Uint8Array.from(atob(asset.encoded), (character) => character.charCodeAt(0)) : asset.body;
     return new Response(body, { headers });

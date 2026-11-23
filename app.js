@@ -25,6 +25,8 @@ const pendingReplies = new Map();
 const failedReplies = new Map();
 const elderRoutes = ['elder', 'home-shortcuts', 'chat', 'ask', 'reminders', 'devices', 'device', 'guides', 'guide', 'shared-device', 'assistant-settings', 'mine', 'electricity-card', ...recordRoutes];
 const voices = window.SpeechRecognition || window.webkitSpeechRecognition;
+const androidRelease = '0.5';
+const installedAndroid = navigator.userAgent.match(/\bHebanAndroid\/([\d.]+)/)?.[1];
 const longDate = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
 const repeats = { never: '只提醒一次', daily: '每天提醒', weekly: '每周提醒' };
 const symbol = {
@@ -300,6 +302,12 @@ function mineScreen() {
       <div><h2>${escapeHtml(account.name)}</h2><p>${account.guest ? account.temporary ? '本次浏览可用' : '记录保存在当前浏览器' : '记录保存到云端'}</p></div>
       ${account.guest ? loginAction('登录') : '<button class="button quiet" data-action="account-signout" type="button">退出登录</button>'}
     </div>
+    <section class="profile-card tone-blue" aria-labelledby="android-download-title">
+      <div><h2 id="android-download-title">禾伴安卓安装包</h2><p>版本 ${androidRelease} · 支持跨应用屏幕引导</p>
+        ${installedAndroid ? `<p>当前已安装 ${installedAndroid}${installedAndroid === androidRelease ? '' : '。点上方「用浏览器打开」可以下载新版。'}</p>` : ''}
+      </div>
+      ${installedAndroid ? '' : `<a class="button" href="./heban-screen-guide.apk?v=${androidRelease}" download="Heban-${androidRelease}.apk">下载安装包</a>`}
+    </section>
     <div class="app-list">
       ${tile({ link: 'records', title: '我的记录', subtitle: '看看存下的照片', glyph: 'photo' })}
       ${tile({ link: 'reminders', title: '我的提醒', subtitle: '看时间，也可以改时间', glyph: 'bell' })}
