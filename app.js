@@ -9,6 +9,7 @@ import { createRecords } from './records.js';
 import { signInWithDevice } from './sign-in.js';
 import { askAssistant, directAssistantUrl } from './assistant-client.js';
 import { cleanShortcut, defaultShortcuts, shortcutOptions } from './shortcuts.js';
+import { createElectricityCards } from './electricity.js';
 
 const app = document.querySelector('#app');
 const cloudSite = document.querySelector('meta[name="heban-cloud-site"]')?.content;
@@ -16,11 +17,12 @@ const dialog = document.querySelector('#dialog');
 const status = document.querySelector('#status');
 const accountBar = document.querySelector('#account-bar');
 const recordRoutes = ['capture', 'records', 'record'];
-const routes = ['elder', 'family', 'chat', 'ask', 'reminders', 'family-chat', 'family-reminders', 'family-shortcuts', 'home-shortcuts', 'family-overview', 'devices', 'device', 'family-devices', 'device-editor', 'guides', 'guide', 'connections', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes];
-const familyPages = ['elder', 'home-shortcuts', 'family-shortcuts', 'family-overview', 'connections', 'shared-device'];
+const electricityRoutes = ['electricity-cards', 'electricity-editor', 'electricity-card'];
+const routes = ['elder', 'family', 'chat', 'ask', 'reminders', 'family-chat', 'family-reminders', 'family-shortcuts', 'home-shortcuts', 'family-overview', 'devices', 'device', 'family-devices', 'device-editor', 'guides', 'guide', 'connections', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes, ...electricityRoutes];
+const familyPages = ['elder', 'home-shortcuts', 'family-shortcuts', 'family-overview', 'connections', 'shared-device', 'electricity-cards'];
 const pendingReplies = new Map();
 const failedReplies = new Map();
-const elderRoutes = ['elder', 'home-shortcuts', 'chat', 'ask', 'reminders', 'devices', 'device', 'guides', 'guide', 'shared-device', 'assistant-settings', 'mine', ...recordRoutes];
+const elderRoutes = ['elder', 'home-shortcuts', 'chat', 'ask', 'reminders', 'devices', 'device', 'guides', 'guide', 'shared-device', 'assistant-settings', 'mine', 'electricity-card', ...recordRoutes];
 const voices = window.SpeechRecognition || window.webkitSpeechRecognition;
 const longDate = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
 const repeats = { never: '只提醒一次', daily: '每天提醒', weekly: '每周提醒' };
@@ -50,6 +52,7 @@ const symbol = {
 const icon = (name, size = 24) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${symbol[name]}</svg>`;
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const records = createRecords({ paint: render, pageHeader, escapeHtml, icon, showDialog, closeDialog: () => dialog.close(), notify, isGuest: () => account?.guest });
+const electricity = createElectricityCards({ api, escapeHtml, pageHeader, loginAction, render, speak, stopSpeech, account: () => account, family: () => family });
 
 let state = newState();
 let route = readRoute();
@@ -234,14 +237,16 @@ function visibleDefaults(added) {
 function homeShortcutsScreen() {
   const added = addedHomeShortcuts();
   const defaults = visibleDefaults(added).map((key) => ({ ...shortcutOptions[key], key, place: 'default' }));
-  const rows = [...defaults, ...added];
+  const rows = [...defaults, ...added, ...electricity.homeEntries()];
+  const hiddenCards = electricity.hiddenEntries();
   const hidden = state.hiddenShortcuts.filter((key) => !added.some((item) => item.key === key));
   return `${pageHeader('管理常用功能', 'elder')}<main class="surface shortcut-screen">
     <p class="device-help">删除后，该入口会从首页移除。原来的提醒、照片和使用记录仍可查看。</p>
     <section class="shortcut-items"><h2>首页上的功能</h2>
       ${rows.length ? `<ul class="record-list">${rows.map((item) => `<li class="shortcut-row"><div><strong>${escapeHtml(item.title)}</strong>${item.subtitle ? `<span>${escapeHtml(item.subtitle)}</span>` : ''}</div>
-        <button class="button quiet" type="button" data-action="remove-shortcut" data-id="${escapeHtml(item.id ?? '')}" data-place="${item.place}" data-key="${escapeHtml(item.key ?? '')}" aria-label="删除${escapeHtml(item.title)}入口">删除</button></li>`).join('')}</ul>` : '<p class="empty-card">首页暂时没有常用入口。</p>'}</section>
+        <button class="button quiet" type="button" data-action="${item.place === 'electricity' ? 'hide-electricity' : 'remove-shortcut'}" data-id="${escapeHtml(item.id ?? '')}" data-place="${item.place}" data-key="${escapeHtml(item.key ?? '')}" aria-label="删除${escapeHtml(item.title)}入口">删除</button></li>`).join('')}</ul>` : '<p class="empty-card">首页暂时没有常用入口。</p>'}</section>
     ${hidden.length ? `<section class="shortcut-items"><h2>可恢复的默认入口</h2><ul class="record-list">${hidden.map((key) => `<li class="shortcut-row"><strong>${escapeHtml(shortcutOptions[key].title)}</strong><button class="button quiet" type="button" data-action="restore-shortcut" data-key="${key}">恢复</button></li>`).join('')}</ul></section>` : ''}
+    ${hiddenCards.length ? `<section class="shortcut-items"><h2>可恢复的操作卡</h2><ul class="record-list">${hiddenCards.map((item) => `<li class="shortcut-row"><strong>${escapeHtml(item.title)}</strong><button class="button quiet" type="button" data-action="restore-electricity" data-id="${escapeHtml(item.id)}">恢复</button></li>`).join('')}</ul></section>` : ''}
   </main>`;
 }
 
@@ -249,7 +254,7 @@ function elderHome() {
   const next = reminderOrder(state.reminders, 'elder').find((item) => !item.done && item.at > Date.now());
   const added = addedHomeShortcuts();
   const defaults = visibleDefaults(added);
-  const featured = [...quickCards.filter((item) => defaults.includes(item.key)), ...added];
+  const featured = [...electricity.homeEntries(), ...quickCards.filter((item) => defaults.includes(item.key)), ...added];
   return `${homeHeader('elder')}<main class="surface home-screen">
     <div class="home-heading"><h1 id="screen-title" tabindex="-1">生活帮手</h1><p class="date">${longDate.format(new Date())}</p></div>
     <section class="feature-banner home-capture" aria-labelledby="capture-home-title">
@@ -269,7 +274,7 @@ function elderHome() {
 
 function bottomNav() {
   const tabs = [
-    { link: 'elder', label: '首页', glyph: 'home', pages: ['elder', 'home-shortcuts'] },
+    { link: 'elder', label: '首页', glyph: 'home', pages: ['elder', 'home-shortcuts', 'electricity-card'] },
     { link: 'ask', label: '助手', glyph: 'chat', pages: ['ask', 'chat', 'assistant-settings', 'capture'] },
     { link: 'guides', label: '跟着做', glyph: 'bill', pages: ['guides', 'guide', 'devices', 'device'] },
     { link: 'mine', label: '我的', glyph: 'people' },
@@ -310,6 +315,7 @@ function familyHome() {
       <span><strong>${demoLastSeen ? '本机提醒演示' : '本机关怀设置'}</strong><span>${activity}</span></span>${icon('right', 22)}</button>
     <div class="contact-card"><span class="tile-icon apricot">${icon('phone', 30)}</span><span class="tile-text"><strong>给${escapeHtml(state.contactName)}打电话</strong><span>${callReminder ? `${formatWhen(callReminder.at)} 有联系提醒` : '选个时间，打个电话'}</span></span>${phoneAction}</div>
     <div class="feature-grid family-tools">
+      ${featureCard({ link: 'electricity-cards', title: '查电费操作卡', subtitle: electricity.needsHelp() ? '有操作卡需要修改' : '圈出位置，录一句话', glyph: 'bill', color: 'mint' })}
       ${featureCard({ link: 'connections', title: '家庭连接', subtitle: '连接家人和查看分享', glyph: 'people', color: 'blue' })}
       ${featureCard({ link: 'family-overview', title: '长辈聊天和近况', subtitle: '查看长辈同意分享的内容', glyph: 'heart', color: 'peach' })}
       ${featureCard({ link: 'family-reminders', title: '联系提醒', subtitle: '记下打电话的时间', glyph: 'calendar', color: 'peach' })}
@@ -331,6 +337,7 @@ function familyShortcutsScreen() {
   return `${head}<main class="surface shortcut-screen">
     <form class="shortcut-form" data-form="family-shortcut">
       <h2>添加一个功能</h2>
+      <a class="section-link" href="#/electricity-cards">给家人制作查电费操作卡</a>
       <label for="shortcut-recipient">加给谁？</label>
       <select id="shortcut-recipient" name="recipient" required>${links.length > 1 ? '<option value="">请选择一位家人</option>' : ''}
         ${links.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}的首页</option>`).join('')}
@@ -348,7 +355,7 @@ function familyShortcutsScreen() {
       <div class="shortcut-custom" data-shortcut-custom hidden>
         <label for="shortcut-url">网页地址</label><input id="shortcut-url" name="target" type="url" inputmode="url" maxlength="500" placeholder="https://" disabled>
       </div>
-      <p class="form-error" role="alert">${escapeHtml(familyError)}</p>
+  <p class="form-error" role="alert">${escapeHtml(familyError)}</p>
       <button class="button" type="submit">${icon('plus', 21)}添加到长辈端</button>
     </form>
     <section class="shortcut-items"><h2>已添加</h2>
@@ -965,6 +972,7 @@ function cloudEntry(message = '', values = {}) {
 async function startCloud(mode) {
   const switching = Boolean(authMode && mode !== authMode);
   const result = await connectCloud(updateCloudStatus, mode);
+  electricity.reset();
   account = result.user;
   authMode = mode;
   account = mode === 'legacy' ? { ...account, legacy: true } : account;
@@ -1043,6 +1051,7 @@ async function chooseAccess(action, button) {
     } else if (action === 'account-signout') {
       await flushBeforeSwitch();
       if (authMode === 'account') await api('/api/auth/logout', 'POST');
+      electricity.reset();
       accessPreference('');
       account = null;
       authMode = '';
@@ -1088,7 +1097,8 @@ function render() {
     connections: connectionsScreen, 'shared-device': deviceScreen, 'home-shortcuts': homeShortcutsScreen, 'family-overview': familyOverviewScreen,
     capture: records.captureScreen, records: records.recordsScreen, record: records.recordScreen, 'assistant-settings': assistantSettings, mine: mineScreen,
   };
-  app.innerHTML = screens[route]() + bottomNav();
+  const screen = electricityRoutes.includes(route) ? electricity.screen : screens[route];
+  app.innerHTML = screen() + bottomNav();
 }
 
 function showDialog(title, body) {
@@ -1289,6 +1299,11 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (!account) return;
+  if (action.startsWith('electricity-')) { void electricity.action(action.slice('electricity-'.length), button, event); return; }
+  if (action === 'hide-electricity' || action === 'restore-electricity') {
+    void electricity.visibility(id, action === 'hide-electricity', button).catch(actionError);
+    return;
+  }
   if (recordRoutes.includes(route) && action.startsWith('capture-')) { void records.action(action, button); return; }
   if (action === 'remove-shortcut') { void removeShortcut(button); return; }
   if (action === 'restore-shortcut') { state.hiddenShortcuts = state.hiddenShortcuts.filter((key) => key !== button.dataset.key); refresh('已恢复到首页。'); return; }
@@ -1442,6 +1457,8 @@ document.addEventListener('submit', (event) => {
   event.preventDefault();
   const data = new FormData(form);
   switch (form.dataset.form) {
+    case 'electricity-publish': void electricity.submit('publish'); break;
+    case 'electricity-help': void electricity.submit('help'); break;
     case 'email-login': void submitEmailLogin(form, data); break;
     case 'scene-record':
       if (event.submitter?.value === 'analyze') void records.analyze(data);
@@ -1495,8 +1512,14 @@ document.addEventListener('submit', (event) => {
   }
 });
 
+document.addEventListener('input', (event) => {
+  if (event.target.matches('[data-electricity-field], [data-electricity-step]')) electricity.input(event.target);
+});
+
 document.addEventListener('change', async (event) => {
   const field = event.target;
+  if (field.matches('select[data-electricity-field]')) { electricity.input(field); return; }
+  if (field.matches('[data-electricity-file]')) { await electricity.file(field); return; }
   if (field.id === 'shortcut-kind') {
     const custom = field.form.querySelector('[data-shortcut-custom]');
     custom.hidden = field.value !== 'website';
@@ -1545,6 +1568,7 @@ document.addEventListener('change', async (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (event.target.matches('[data-action="electricity-pin"]')) { electricity.adjustPin(event); return; }
   if (!event.target.matches('.photo-target[data-action="device-pin"]')) return;
   const offsets = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   if (!offsets[event.key]) return;
@@ -1577,8 +1601,13 @@ function enterScreen(focus = false) {
   }
   if (route === 'chat' && !state.greeted) { state.greeted = true; save(); }
   noteActivity();
+  void electricity.open(route, id);
   render();
   if (familyPages.includes(route)) void loadFamily();
+  if (route === 'electricity-editor' && !id && !family) {
+    const active = account;
+    void loadFamily().then(() => { if (account === active && route === 'electricity-editor' && !routeDeviceId()) render(); });
+  }
   if (route === 'family-overview') void loadOverview();
   else overview = null;
   if (focus) {
@@ -1601,11 +1630,13 @@ document.addEventListener('visibilitychange', () => {
   noteActivity();
   if (account && document.visibilityState === 'visible') {
     if (route === 'elder') void loadFamily();
+    if (['elder', 'family', 'home-shortcuts', 'electricity-cards'].includes(route)) void electricity.refresh();
     if (route === 'family-overview') void loadOverview();
   }
   if (account) checkReminders();
 });
 window.addEventListener('pagehide', records.stopCamera);
+window.addEventListener('pagehide', electricity.stopMedia);
 window.addEventListener('pageshow', (event) => {
   if (event.persisted && route === 'capture') void records.action('capture-reset');
 });

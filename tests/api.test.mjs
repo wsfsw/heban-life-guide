@@ -116,6 +116,53 @@ test('family shortcuts are added for connected accounts and revoked with the con
   assert.deepEqual((await (await family('/api/family')).json()).shortcuts, []);
 });
 
+test('electricity cards preserve their entry across edits and limit access to the connected pair', async (t) => {
+  const env = await localStorageBindings();
+  t.after(env.close);
+  const elder = client(env, 'elder');
+  const family = client(env, 'child');
+  const stranger = client(env, 'stranger');
+  const base = '/api/family/cards';
+  const photo = 'data:image/jpeg;base64,/9j/2Q==';
+  const steps = [
+    { id: 'open-service', text: '打开缴费页面', photo, x: 0.2, y: 0.3 },
+    { id: 'choose-bill', text: '找到电费账单', photo, x: 0.4, y: 0.6, audio: 'data:audio/mpeg;base64,SURDAA==' },
+  ];
+  const draft = { recipient: 'elder', title: '查老家电费', steps };
+  assert.equal((await family(base, 'POST', draft)).status, 403);
+  const { code } = await (await family('/api/family/invite', 'POST')).json();
+  await elder('/api/family/join', 'POST', { code });
+  const created = await family(base, 'POST', draft);
+  assert.equal(created.status, 201);
+  const { id, revision } = await created.json();
+  const path = base + '/' + id;
+  assert.equal((await family(base, 'POST', draft)).status, 409);
+  assert.equal((await stranger(path)).status, 404);
+  assert.equal((await elder(path, 'PUT', { ...draft, revision })).status, 403);
+  assert.equal((await family(path + '/help', 'POST', { stepId: 'choose-bill', revision })).status, 403);
+  assert.deepEqual((await (await elder(path)).json()).steps[1], steps[1]);
+  assert.equal((await elder(path + '/help', 'POST', { stepId: 'choose-bill', revision, photo })).status, 201);
+  assert.equal((await (await family(base)).json()).cards[0].needsHelp, true);
+  assert.deepEqual((await (await family(path)).json()).issue, { stepId: 'choose-bill', photo });
+  assert.equal((await (await elder(path)).json()).issue, null);
+  assert.equal((await elder(path + '/visibility', 'PATCH', { hidden: true })).status, 200);
+  const newSteps = [steps[0], { ...steps[1], text: '在用电服务里点账单' }];
+  assert.equal((await family(path, 'PUT', { ...draft, steps: newSteps, revision })).status, 200);
+  const current = await (await elder(path)).json();
+  assert.equal(current.id, id);
+  assert.equal(current.revision, 2);
+  assert.equal(current.hidden, true);
+  assert.equal(current.steps[1].text, newSteps[1].text);
+  assert.equal(current.needsHelp, false);
+  assert.equal((await elder(path + '/help', 'POST', { stepId: 'choose-bill', revision })).status, 409);
+  assert.equal((await elder(path + '/visibility', 'PATCH', { hidden: false })).status, 200);
+  assert.equal((await (await elder(base)).json()).cards[0].hidden, false);
+  assert.deepEqual((await (await elder('/api/family')).json()).items, []);
+  await elder('/api/family/link/child', 'DELETE');
+  assert.equal((await elder(path)).status, 404);
+  assert.deepEqual((await (await family(base)).json()).cards, []);
+});
+
 test('family overview reads only the linked elder’s opted-in activity and recent conversations', async (t) => {
   const env = await localStorageBindings();
   t.after(env.close);

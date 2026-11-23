@@ -35,6 +35,7 @@ async function buildAssets() {
     'logic.js': 'text/javascript; charset=utf-8',
     'assistant-client.js': 'text/javascript; charset=utf-8',
     'shortcuts.js': 'text/javascript; charset=utf-8',
+    'electricity.js': 'text/javascript; charset=utf-8',
   };
   const assets = Object.fromEntries(await Promise.all(Object.entries(types).map(async ([file, type]) => [`/${file}`, { type, body: await read(file) }])));
   for (const file of ['guide-kit.webp', 'voice-card.webp']) {
@@ -77,6 +78,7 @@ async function buildPages(assets) {
     if (path === '/index.html') {
       const assistantMeta = assistantUrl ? `<meta name="heban-assistant-url" content="${assistantUrl.replaceAll('&', '&amp;')}">\n    ` : '';
       contents = contents.replace('<title>', `<meta name="heban-cloud-site" content="${cloudSite}">\n    ${assistantMeta}<title>`)
+        .replace('href="./styles.css"', `href="./styles.css?v=${createHash('sha256').update(assets['/styles.css'].body).digest('hex').slice(0, 12)}"`)
         .replace('src="./app.js"', `src="./app.js?v=${version}"`);
     }
     await mkdir(dirname(fileURLToPath(file)), { recursive: true });
@@ -100,7 +102,7 @@ export default {
       'Cache-Control': asset.type.startsWith('image/') ? 'public, max-age=3600' : 'no-store',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'same-origin',
-      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
+      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
     };
     const body = request.method === 'HEAD' ? null
       : asset.encoded ? Uint8Array.from(atob(asset.encoded), (character) => character.charCodeAt(0)) : asset.body;

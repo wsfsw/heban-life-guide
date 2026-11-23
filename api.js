@@ -385,13 +385,123 @@ async function familyData(db, user) {
     CASE WHEN s.sender_id = ? THEN 'sent' ELSE 'received' END as direction, p.display_name as name
     FROM family_shares s JOIN family_links f ON f.person_a = min(s.sender_id, s.recipient_id) AND f.person_b = max(s.sender_id, s.recipient_id)
     JOIN profiles p ON p.user_id = CASE WHEN s.sender_id = ? THEN s.recipient_id ELSE s.sender_id END
-    WHERE s.recipient_id = ? OR s.sender_id = ? ORDER BY s.created_at DESC LIMIT 100`, user.id, user.id, user.id, user.id);
+    WHERE (s.recipient_id = ? OR s.sender_id = ?) AND s.kind <> 'electricity-card' ORDER BY s.created_at DESC LIMIT 100`, user.id, user.id, user.id, user.id);
   const shortcuts = await all(db, `SELECT s.id, s.kind, s.target, s.title, s.recipient_id AS recipient,
     CASE WHEN s.sender_id = ? THEN 'sent' ELSE 'received' END AS direction, p.display_name AS name
     FROM family_shortcuts s JOIN family_links f ON f.person_a = min(s.sender_id, s.recipient_id) AND f.person_b = max(s.sender_id, s.recipient_id)
     JOIN profiles p ON p.user_id = CASE WHEN s.sender_id = ? THEN s.recipient_id ELSE s.sender_id END
     WHERE s.recipient_id = ? OR s.sender_id = ? ORDER BY s.created_at DESC LIMIT 100`, user.id, user.id, user.id, user.id);
   return { links, items: items.map((item) => ({ ...item, payload: JSON.parse(item.payload) })), shortcuts };
+}
+
+const electricityRows = `SELECT s.id, s.sender_id, s.recipient_id, s.payload, s.photo_id
+  FROM family_shares s JOIN family_links f ON f.person_a = min(s.sender_id, s.recipient_id)
+  AND f.person_b = max(s.sender_id, s.recipient_id) WHERE s.kind = 'electricity-card'`;
+
+function cardMetadata(row, user) {
+  const { asset, issue, ...fields } = JSON.parse(row.payload);
+  return { ...fields, id: row.id, sender: row.sender_id, recipient: row.recipient_id,
+    direction: row.sender_id === user.id ? 'sent' : 'received', needsHelp: Boolean(issue) };
+}
+
+async function loadCardContent(env, key) {
+  const object = await env.BUCKET.get(key);
+  if (!object) fail(503, '这张操作卡暂时读不到，请稍后再试。');
+  return new Response(object.body).json();
+}
+
+async function removeCardAsset(env, key) {
+  if (key) await env.BUCKET.delete(key).catch(() => console.warn('Heban card asset cleanup failed'));
+}
+
+function cleanCardSteps(input) {
+  if (!Array.isArray(input) || !input.length || input.length > 5) fail(422, '请为操作卡填写 1 到 5 步。');
+  const ids = new Set();
+  return input.map((item) => {
+    const text = lines(item?.text, 100);
+    if (!text || !safeId.test(item?.id ?? '') || ids.has(item.id)) fail(422, '请检查每一步的说明。');
+    ids.add(item.id);
+    decodePicture(item.photo);
+    if (![item.x, item.y].every((value) => typeof value === 'number' && value >= 0 && value <= 1)) fail(422, '请在每张截图上标出位置。');
+    const audio = item.audio ?? '';
+    if (audio && (typeof audio !== 'string' || audio.length > 360_000
+      || !/^data:audio\/(webm|ogg|mp4|mpeg|wav)(?:;codecs=[A-Za-z0-9.-]+)?;base64,[A-Za-z0-9+/]+={0,2}$/.test(audio))) fail(422, '录音格式不支持或文件过大。');
+    return { id: item.id, text, photo: item.photo, x: item.x, y: item.y, audio };
+  });
+}
+
+async function electricityCards(request, env, user, path) {
+  const { DB: db, BUCKET: bucket } = env;
+  const method = request.method;
+  const id = path[1];
+  const action = path[2];
+  const scope = ' AND (s.sender_id = ? OR s.recipient_id = ?)';
+  if (!id && method === 'GET') {
+    const rows = await all(db, electricityRows + scope + ' ORDER BY s.created_at DESC', user.id, user.id);
+    return json({ cards: rows.map((row) => cardMetadata(row, user)) });
+  }
+  const row = id ? await get(db, electricityRows + scope + ' AND s.id = ?', user.id, user.id, id) : null;
+  if (id && !row) fail(404, '这张操作卡已移除，或家庭连接已解除。');
+  const current = row ? JSON.parse(row.payload) : null;
+  const sender = row?.sender_id === user.id;
+  if (row && method === 'GET' && !action) {
+    const { steps } = await loadCardContent(env, current.asset);
+    const issue = sender && current.issue ? { stepId: current.issue.stepId,
+      photo: current.issue.asset ? (await loadCardContent(env, current.issue.asset)).photo : '' } : null;
+    return json({ ...cardMetadata(row, user), steps, issue });
+  }
+  const update = (metadata) => run(db, `UPDATE family_shares SET payload = ? WHERE id = ? AND payload = ?`, JSON.stringify(metadata), id, row.payload);
+  if (row && !sender && method === 'PATCH' && action === 'visibility') {
+    const { hidden } = await readJson(request, 1000) ?? {};
+    if (typeof hidden !== 'boolean') fail(422, '请选择是否在首页显示。');
+    if (!(await update({ ...current, hidden })).meta.changes) fail(409, '操作卡刚有更新，请重试。');
+    return json({ hidden });
+  }
+  if (row && !sender && method === 'POST' && action === 'help') {
+    const { revision, stepId, photo } = await readJson(request, 200_000) ?? {};
+    if (revision !== current.revision) fail(409, '家人已更新这张卡，请打开新版再试。');
+    const { steps } = await loadCardContent(env, current.asset);
+    if (!steps.some((step) => step.id === stepId)) fail(422, '找不到这一步，请重新打开操作卡。');
+    if (photo) decodePicture(photo);
+    const asset = photo ? `electricity-${crypto.randomUUID()}` : null;
+    if (asset) await bucket.put(asset, new TextEncoder().encode(JSON.stringify({ photo })));
+    try {
+      if (!(await update({ ...current, issue: { stepId, asset } })).meta.changes) fail(409, '操作卡刚有更新，请重新打开。');
+    } catch (error) { await removeCardAsset(env, asset); throw error; }
+    await removeCardAsset(env, current.issue?.asset);
+    return json({ sent: true }, 201);
+  }
+  if (!action && ((!id && method === 'POST') || (sender && method === 'PUT'))) {
+    const data = await readJson(request, 2_800_000);
+    const recipient = row?.recipient_id ?? data?.recipient;
+    if (!safeId.test(recipient ?? '') || recipient === user.id) fail(422, '请先选择一位已连接的家人。');
+    if (!await get(db, `SELECT 1 FROM family_links WHERE ${connection}`, ...pair(user.id, recipient))) fail(403, '请先和这位家人建立连接。');
+    if (row && data?.revision !== current.revision) fail(409, '另一台设备已更新操作卡，请重新打开再编辑。');
+    const title = lines(data?.title, 26);
+    if (!title) fail(422, '请填写操作卡的名字。');
+    const steps = cleanCardSteps(data?.steps);
+    const asset = `electricity-${crypto.randomUUID()}`;
+    const cardId = id ?? crypto.randomUUID();
+    const metadata = { title, asset, revision: (current?.revision ?? 0) + 1,
+      hidden: current?.hidden ?? false, issue: current?.issue ?? null };
+    if (current?.issue) {
+      const { steps: before } = await loadCardContent(env, current.asset);
+      const step = steps.find((item) => item.id === current.issue.stepId);
+      if (JSON.stringify(step) !== JSON.stringify(before.find((item) => item.id === current.issue.stepId))) metadata.issue = null;
+    }
+    await bucket.put(asset, new TextEncoder().encode(JSON.stringify({ steps })));
+    try {
+      const result = row ? await update(metadata) : await run(db, `INSERT INTO family_shares SELECT ?, ?, ?, 'electricity-card', ?, NULL, ?
+        WHERE EXISTS (SELECT 1 FROM family_links WHERE ${connection}) AND NOT EXISTS
+        (SELECT 1 FROM family_shares WHERE sender_id = ? AND recipient_id = ? AND kind = 'electricity-card')`,
+      cardId, user.id, recipient, JSON.stringify(metadata), Date.now(), ...pair(user.id, recipient), user.id, recipient);
+      if (!result.meta.changes) fail(409, row ? '操作卡刚有更新，请重新打开。' : '这位家人已有一张查电费卡，或家庭连接已解除。');
+    } catch (error) { await removeCardAsset(env, asset); throw error; }
+    await removeCardAsset(env, current?.asset);
+    if (!metadata.issue) await removeCardAsset(env, current?.issue?.asset);
+    return json({ id: cardId, revision: metadata.revision }, row ? 200 : 201);
+  }
+  fail(403, '这项操作只能由指定的家人完成。');
 }
 
 async function familyOverview(db, viewer, other) {
@@ -433,6 +543,8 @@ async function routeApi(request, env) {
   const accountOnly = request.headers.get('X-Heban-Account') === '1' || method === 'GET' && identity === 'account';
   const user = legacy ? siteUser(request) : await sessionUser(db, token) ?? (accountOnly ? null : siteUser(request));
   if (!user) fail(401, '请登录禾伴。');
+  const card = pathname.match(/^\/api\/family\/cards(?:\/([a-z0-9-]+)(?:\/(help|visibility))?)?$/);
+  if (card) return electricityCards(request, env, user, card);
   if (pathname === '/api/records' && method === 'GET') {
     const entries = await all(db, `SELECT ${recordColumns} FROM scene_records WHERE owner_id = ? ORDER BY created_at DESC LIMIT 24`, user.id);
     return json({ records: entries.map(recordView) });
@@ -500,11 +612,18 @@ async function routeApi(request, env) {
   if (method === 'DELETE' && pathname.startsWith('/api/family/link/')) {
     const other = pathname.split('/').at(-1);
     if (!safeId.test(other)) fail(404, '找不到这位家人。');
+    const unlinkCards = await all(db, electricityRows + ` AND ((s.sender_id = ? AND s.recipient_id = ?) OR
+      (s.sender_id = ? AND s.recipient_id = ?))`, user.id, other, other, user.id);
     await db.batch([
       db.prepare(`DELETE FROM family_links WHERE ${connection}`).bind(...pair(user.id, other)),
       db.prepare('DELETE FROM family_shares WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)').bind(user.id, other, other, user.id),
       db.prepare('DELETE FROM family_shortcuts WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)').bind(user.id, other, other, user.id),
     ]);
+    for (const row of unlinkCards) {
+      const { asset, issue } = JSON.parse(row.payload);
+      await removeCardAsset(env, asset);
+      await removeCardAsset(env, issue?.asset);
+    }
     return json(await familyData(db, user));
   }
   if (method === 'POST' && pathname === '/api/family/share') {
@@ -525,7 +644,7 @@ async function routeApi(request, env) {
   if (method === 'DELETE' && pathname.startsWith('/api/family/share/')) {
     const id = pathname.split('/').at(-1);
     if (!safeId.test(id)) fail(404, '找不到这条分享。');
-    await run(db, 'DELETE FROM family_shares WHERE id = ? AND sender_id = ?', id, user.id);
+    await run(db, "DELETE FROM family_shares WHERE id = ? AND sender_id = ? AND kind <> 'electricity-card'", id, user.id);
     return json(await familyData(db, user));
   }
   if (method === 'POST' && pathname === '/api/family/shortcuts') {
