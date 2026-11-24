@@ -32,6 +32,7 @@ const repeats = { never: '只提醒一次', daily: '每天提醒', weekly: '每�
 const symbol = {
   home: '<path d="M3 10.8 10.3 4.5a2.6 2.6 0 0 1 3.4 0L21 10.8M4.8 9.4v9.1a2 2 0 0 0 2 2h10.4a2 2 0 0 0 2-2V9.4"/><path fill="currentColor" stroke-width="1.1" d="M12 16.8 9 14a1.8 1.8 0 0 1 2.5-2.6l.5.5.5-.5A1.8 1.8 0 0 1 15 14z"/>',
   people: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2zm2-6a4 4 0 0 1 4 4v2m-4-17a4 4 0 0 1 0 8"/><circle cx="9" cy="8" r="4"/>',
+  person: '<circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/>',
   heart: '<path d="M20.8 5.8a4.8 4.8 0 0 0-6.8 0l-2 2-2-2a4.8 4.8 0 0 0-6.8 6.8l8.8 8.5 8.8-8.5a4.8 4.8 0 0 0 0-6.8z"/>',
   bell: '<path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12a2 2 0 0 0 4 0M12 1v2"/>',
   question: '<circle cx="12" cy="12" r="9.5"/><path d="M9 9a3 3 0 1 1 4.4 2.7c-.9.5-1.4 1.1-1.4 2.3m0 3h.01"/>',
@@ -50,6 +51,7 @@ const symbol = {
   photo: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.5"/><path d="m3 17 5-4 4 3 4-6 5 5"/>',
   camera: '<path d="M8 6 9.4 4h5.2L16 6h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/><circle cx="12" cy="13" r="3.1"/>',
   parcel: '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18m-12-2h6m-4 7h2"/>',
+  download: '<path d="M12 3v12m-4-4 4 4 4-4M5 16v4a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4"/>',
   bill: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6m-6 4h6m-6 4h4"/>',
 };
 const icon = (name, size = 24) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${symbol[name]}</svg>`;
@@ -297,24 +299,36 @@ function bottomNav() {
 }
 
 function mineScreen() {
+  const storageLabel = account.guest
+    ? account.temporary ? '本次浏览可用' : '记录保存在当前浏览器'
+    : '记录保存到云端';
   return `${pageHeader('我的', 'elder')}<main class="surface mine-screen">
-    <div class="profile-card tone-blue"><span class="feature-icon">${icon('people', 28)}</span>
-      <div><h2>${escapeHtml(account.name)}</h2><p>${account.guest ? account.temporary ? '本次浏览可用' : '记录保存在当前浏览器' : '记录保存到云端'}</p></div>
-      ${account.guest ? loginAction('登录') : '<button class="button quiet" data-action="account-signout" type="button">退出登录</button>'}
-    </div>
-    <section class="profile-card tone-blue" aria-labelledby="android-download-title">
-      <div><h2 id="android-download-title">禾伴安卓安装包</h2><p>版本 ${androidRelease} · 支持跨应用屏幕引导</p>
-        ${installedAndroid ? `<p>当前已安装 ${installedAndroid}${installedAndroid === androidRelease ? '' : '。点上方「用浏览器打开」可以下载新版。'}</p>` : ''}
+    <section class="mine-panel mine-account tone-blue" aria-labelledby="mine-account-title">
+      <div class="mine-panel-title">
+        <span class="feature-icon">${icon('person', 28)}</span>
+        <div><h2 id="mine-account-title">${escapeHtml(account.name)}</h2><p>${storageLabel}</p></div>
+      </div>
+      ${account.guest ? loginAction('登录', 'button quiet') : '<button class="button quiet" data-action="account-signout" type="button">退出登录</button>'}
+    </section>
+    <section class="mine-tools" aria-labelledby="mine-tools-title">
+      <h2 id="mine-tools-title">常用功能</h2>
+      <div class="feature-grid">
+        ${featureCard({ link: 'records', title: '我的记录', subtitle: '查看保存的照片', glyph: 'photo', color: 'blue' })}
+        ${featureCard({ link: 'reminders', title: '我的提醒', subtitle: '查看或修改提醒', glyph: 'bell', color: 'peach' })}
+        ${featureCard({ link: 'assistant-settings/mine', title: '助手设置', subtitle: '调整朗读语速', glyph: 'tune', color: 'lilac' })}
+        ${featureCard({ link: 'connections', title: '和家人分享', subtitle: '设置分享范围', glyph: 'people', color: 'mint' })}
+      </div>
+      ${tile({ link: 'family', title: '家属端', subtitle: '联系家人、制作设备卡', glyph: 'heart' })}
+    </section>
+    <section class="mine-panel mine-download tone-blue" aria-labelledby="android-download-title">
+      <div class="mine-panel-title">
+        <span class="feature-icon">${icon('download', 25)}</span>
+        <div><h2 id="android-download-title">禾伴安卓安装包</h2><p>版本 ${androidRelease} · 支持跨应用屏幕引导</p>
+          ${installedAndroid ? `<p>当前已安装 ${installedAndroid}${installedAndroid === androidRelease ? '' : '。点上方「用浏览器打开」可以下载新版。'}</p>` : ''}
+        </div>
       </div>
       ${installedAndroid ? '' : `<a class="button" href="./heban-screen-guide.apk?v=${androidRelease}" download="Heban-${androidRelease}.apk">下载安装包</a>`}
     </section>
-    <div class="app-list">
-      ${tile({ link: 'records', title: '我的记录', subtitle: '看看存下的照片', glyph: 'photo' })}
-      ${tile({ link: 'reminders', title: '我的提醒', subtitle: '看时间，也可以改时间', glyph: 'bell' })}
-      ${tile({ link: 'assistant-settings/mine', title: '助手设置', subtitle: '可以让助手读慢一点', glyph: 'tune' })}
-      ${tile({ link: 'connections', title: '和家人分享', subtitle: '选择家人能看到的内容', glyph: 'people' })}
-      ${tile({ link: 'family', title: '家属端', subtitle: '联系家人、制作设备卡', glyph: 'heart' })}
-    </div>
   </main>`;
 }
 
